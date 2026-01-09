@@ -1,7 +1,8 @@
-from mercury_ocip.commands.base_command import OCIRequest
 import attr
 from abc import ABC, abstractmethod
 import logging
+import asyncio
+from typing import Union
 
 from mercury_ocip.pool import PoolConfig, TCPConnectionPool
 from mercury_ocip.libs.types import (
@@ -9,6 +10,7 @@ from mercury_ocip.libs.types import (
     DisconnectResult,
     ConnectResult,
 )
+from mercury_ocip.exceptions import MErrorSocketTimeout, MErrorSendRequestFailed
 
 _XML_DECLARATION = b'<?xml version="1.0" encoding="ISO-8859-1"?>'
 _BROADSOFT_DOC_START = b'<BroadsoftDocument protocol="OCI" xmlns="C" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
@@ -16,15 +18,17 @@ _BROADSOFT_DOC_END = b"</BroadsoftDocument>"
 _SESSION_ID_TEMPLATE = b'<sessionId xmlns="">%s</sessionId>'
 
 
+@attr.s(slots=True, kw_only=True)
 class BaseRequester(ABC):
-    """Base class for all requesters.
+    """A requester for BroadWorks OCI-P.
 
     Args:
-        logger (logging.Logger): The logger of the requester.
-        host (str): The host of the server.
-        port (int): The port of the server.
-        timeout (int): The timeout of the requester.
-        session_id (str): The session id of the requester.
+        host (str): The Broadworks Server IP (e.g adp.broadworks.com)
+        port (int): The port of the Broadworks Server, usually 2208 for non tls / 2209 for tls
+        config (PoolConfig): The timeout and general pool settings
+        tls (bool): Whether to use a secure wrapped socket, recommened: True
+        session_id (str): The session_id to send in requests
+        logger (Logger): The logger object to retrieve logs and information.
     """
 
     host: str = attr.ib()
@@ -32,6 +36,9 @@ class BaseRequester(ABC):
     config: PoolConfig = attr.ib(default=PoolConfig())
     tls: bool = attr.ib(default=True)
     logger: logging.Logger = attr.ib()
+    session_id: str = attr.ib()
+    _pool: TCPConnectionPool = attr.ib(default=None)
+    _session_id_bytes: bytes = attr.ib(default=None)
 
     def __attrs_post_init__(self):
         self._pool = TCPConnectionPool(
@@ -42,7 +49,9 @@ class BaseRequester(ABC):
             logger=self.logger,
         )
 
-        self.session_id = self.session_id.encode("ISO-8859-1")  # Do this pre-emptively
+        self._session_id_bytes: bytes = self.session_id.encode(
+            "ISO-8859-1"
+        )  # Do this pre-emptively
 
     @abstractmethod
     async def send_request(self, command: str) -> RequestResult:
@@ -50,6 +59,15 @@ class BaseRequester(ABC):
 
         Args:
             command (BroadworksCommand): The command to send to the server.
+        """
+        pass
+
+    @abstractmethod
+    async def send_bulk_request(self, commands: list[str]) -> list[RequestResult]:
+        """Sends multiple requests to the server
+
+        Args:
+            commands (list[BroadworksCommand]): The commands to be sent to the server.
         """
         pass
 
@@ -70,7 +88,7 @@ class BaseRequester(ABC):
         """Disconnects from the server."""
         pass
 
-    def build_oci_xml(self, command: str) -> bytes:
+    def build_oci_xml(self, command: Union[str, list[str]]) -> bytes:
         """Builds an OCI XML request from the given BroadworksCommand.
 
         Constructs an XML document with a session ID and the encoded command,
@@ -83,94 +101,48 @@ class BaseRequester(ABC):
             bytes: The serialized XML document as bytes, encoded with ISO-8859-1.
         """
 
-        command_bytes = command.encode("ISO-8859-1")
+        if isinstance(command, list):
+            command_bytes_list = [command for command in command]
+            commands_payload: bytes = "\n".join(command_bytes_list).encode("ISO-8859-1")
 
-        return b"".join(
-            [
-                _XML_DECLARATION,
-                _BROADSOFT_DOC_START,
-                _SESSION_ID_TEMPLATE % self.session_id,
-                command_bytes,
-                _BROADSOFT_DOC_END,
-            ]
-        )
+            return b"".join(
+                [
+                    _XML_DECLARATION,
+                    _BROADSOFT_DOC_START,
+                    _SESSION_ID_TEMPLATE % self._session_id_bytes,
+                    commands_payload,
+                    _BROADSOFT_DOC_END,
+                ]
+            )
+        else:
+            command_bytes = command.encode("ISO-8859-1")
+
+            return b"".join(
+                [
+                    _XML_DECLARATION,
+                    _BROADSOFT_DOC_START,
+                    _SESSION_ID_TEMPLATE % self._session_id_bytes,
+                    command_bytes,
+                    _BROADSOFT_DOC_END,
+                ]
+            )
 
 
+@attr.s(slots=True, kw_only=True)
 class AsyncTCPRequester(BaseRequester):
-    """An asynchronous TCP requester for BroadWorks OCI-P.
-
-    This class manages an asynchronous connection to a BroadWorks Application
-    Server. It will open a TCP Socket connection, using 2209 for an SSL wrapped
-    socket for encrypted traffic.
+    """A requester for BroadWorks OCI-P.
 
     Args:
-        session_id (str): The session ID passed to keep the session alive.
-        logger (logging.Logger): An instance of `logging.Logger` for logging messages.
-        host (str): The hostname or IP address of the BroadWorks server.
-        port (int): The port for the OCI-P interface, defaults to 2209.
-        timeout (int): The timeout for HTTP requests in seconds, defaults to 10.
+        host (str): The Broadworks Server IP (e.g adp.broadworks.com)
+        port (int): The port of the Broadworks Server, usually 2208 for non tls / 2209 for tls
+        config (PoolConfig): The timeout and general pool settings
+        tls (bool): Whether to use a secure wrapped socket, recommened: True
+        session_id (str): The session_id to send in requests
+        logger (Logger): The logger object to retrieve logs and information.
     """
-
-    def __init__(
-        self,
-        logger: logging.Logger,
-        host: str,
-        port: int = 2209,
-        timeout: int = 10,
-        session_id: str = "",
-        tls: bool = True,
-    ) -> None:
-        self.reader: Optional[StreamReader] = None
-        self.writer: Optional[StreamWriter] = None
-        self.tls = tls
-        super().__init__(
-            logger=logger,
-            host=host,
-            port=port,
-            timeout=timeout,
-            session_id=session_id,
-        )
-
-    async def connect(self) -> ConnectResult:
-        """Connects to the server."""
-        if self.reader is None and self.writer is None:
-            try:
-                if self.tls:
-                    context: ssl.SSLContext = ssl.create_default_context()
-                    self.reader, self.writer = await asyncio.wait_for(
-                        asyncio.open_connection(
-                            host=self.host, port=self.port, ssl=context
-                        ),
-                        timeout=self.timeout,
-                    )
-                    self.logger.info(
-                        f"Initiated socket on {self.__class__.__name__}: {self.host}:{self.port}"
-                    )
-                else:
-                    self.reader, self.writer = await asyncio.wait_for(
-                        asyncio.open_connection(self.host, self.port),
-                        timeout=self.timeout,
-                    )
-            except Exception as e:
-                self.logger.error(
-                    f"Failed to initiate socket on {self.__class__.__name__}: {e}"
-                )
-                return MErrorSocketInitialisation(str(e))
 
     async def disconnect(self) -> DisconnectResult:
         """Disconnects from the server."""
-        if self.reader and self.writer:
-            try:
-                self.writer.close()
-                await self.writer.wait_closed()
-            except Exception as e:
-                self.logger.warning(
-                    f"Exception: {e} was raised when attemping to close {self.__class__.__name__}, but was ignored."
-                )
-                pass
-            finally:
-                self.writer = None
-                self.reader = None
 
     async def send_request(self, command: str) -> RequestResult:
         """Sends a request to the server.
@@ -181,107 +153,46 @@ class AsyncTCPRequester(BaseRequester):
         Returns:
             Any: The response from the server.
         """
+
         try:
-            if self.reader is None or self.writer is None:
-                result: MError | None = await self.connect()
-                if isinstance(result, MError):  # Error returned
-                    return result
+            async with self._pool.acquire() as conn:
+                command_bytes: bytes = self.build_oci_xml(command=command)
 
-            assert self.reader is not None and self.writer is not None
+                self.logger.debug(f"Sending command to {self.host}: {command}")
 
-            command_bytes: bytes = self.build_oci_xml(command)
+                conn.writer.write(command_bytes + b"\n")
+                await conn.writer.drain()
 
-            self.logger.debug(f"Sending command to {self.host}:{self.port}: {command}")
+                content = b""
 
-            self.writer.write(command_bytes + b"\n")
-            await self.writer.drain()
+                while True:
+                    try:
+                        chunk: bytes = await asyncio.wait_for(
+                            conn.reader.read(self.config.read_chunk_size),
+                            timeout=self.config.read_timeout,
+                        )
+                    except asyncio.TimeoutError as e:
+                        self.logger.error(
+                            msg=f"Socket read timed out in {self.__class__.__name__}: {e}"
+                        )
+                        return MErrorSocketTimeout(str(e))
 
-            content = b""
-            while True:
-                try:
-                    chunk: bytes = await asyncio.wait_for(
-                        self.reader.read(4096), timeout=self.timeout
-                    )
-                except asyncio.TimeoutError as e:
-                    self.logger.error(
-                        f"Socket read timed out in {self.__class__.__name__}: {e}"
-                    )
-                    return MErrorSocketTimeout(str(e))
+                    if not chunk:
+                        break
 
-                if not chunk:
-                    break
+                    content += chunk
 
-                content += chunk
-                if b"</BroadsoftDocument>" in content:
-                    break
-            return content.rstrip(b"\n").decode("ISO-8859-1")
-
+                    if b"</BroadsoftDocument>" in content:
+                        break
+                return content.rstrip(b"\n").decode("ISO-8859-1")
         except Exception as e:
             self.logger.error(
-                f"Failed to send command over {self.__class__.__name__}: {e}"
+                msg=f"Failed to send command over {self.__class__.__name__}: {e}"
             )
             return MErrorSendRequestFailed(str(e))
 
+    async def connect():
+        pass
 
-def create_requester(
-    logger: logging.Logger,
-    session_id: str,
-    host: str,
-    port: int,
-    conn_type: str = "SOAP",
-    async_: bool = True,
-    timeout: int = 10,
-    tls: bool = True,
-) -> BaseRequester:
-    """Factory function to create a requester.
-
-    Args:
-        logger (logging.Logger): The logger to use.
-        session_id (str): The session ID to use.
-        host (str): The host to connect to.
-        port (int): The port to connect to.
-        conn_type (str): The connection type to use.
-        async_ (bool): Whether to use an asynchronous requester.
-        timeout (int): The timeout to use.
-
-    Returns:
-        BaseRequester: The created requester.
-    """
-    if conn_type == "SOAP":
-        if async_:
-            return AsyncSOAPRequester(
-                host=host,
-                port=port,
-                timeout=timeout,
-                logger=logger,
-                session_id=session_id,
-            )
-        else:
-            return SyncSOAPRequester(
-                host=host,
-                port=port,
-                timeout=timeout,
-                logger=logger,
-                session_id=session_id,
-            )
-    elif conn_type == "TCP":
-        if async_:
-            return AsyncTCPRequester(
-                host=host,
-                port=port,
-                timeout=timeout,
-                logger=logger,
-                session_id=session_id,
-                tls=tls,
-            )
-        else:
-            return SyncTCPRequester(
-                host=host,
-                port=port,
-                timeout=timeout,
-                logger=logger,
-                session_id=session_id,
-                tls=tls,
-            )
-    else:
-        raise ValueError(f"Unknown connection type: {conn_type}")
+    async def send_bulk_request(self, commands: list[str]) -> list[RequestResult]:
+        pass

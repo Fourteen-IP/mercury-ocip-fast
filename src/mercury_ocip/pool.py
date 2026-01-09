@@ -20,8 +20,8 @@ from mercury_ocip.exceptions import (
 class PoolConfig:
     """Configuration for the connection pool."""
 
-    max_connections: int = 10  # Max connections in pool
-    max_concurrent_requests: int = 50  # Max simultaneous in-flight requests
+    max_connections: int = 50  # Max connections in pool
+    max_concurrent_requests: int = 100  # Max simultaneous in-flight requests
 
     connect_timeout: float = 10.0  # Time to establish TCP connection
     read_timeout: float = 30.0  # Time to wait for response
@@ -90,11 +90,15 @@ class BaseTCPConnectionPool:
     config: PoolConfig = attr.ib(default=PoolConfig())
     tls: bool = attr.ib(default=True)
     logger: logging.Logger = attr.ib()
-    _pool: asyncio.LifoQueue[PooledConnection] = attr.ib(default=asyncio.LifoQueue())
-    _semaphore: asyncio.Semaphore = attr.ib(default=asyncio.Semaphore())
-    _lock: asyncio.Lock = attr.ib(default=asyncio.Lock())
-    _all_connections: set[PooledConnection] = attr.ib(default=set())
+    _pool: asyncio.LifoQueue[PooledConnection] = attr.ib(factory=asyncio.LifoQueue)
+    _semaphore: asyncio.Semaphore = attr.ib(default=None)  # Set in __attrs_post_init__
+    _lock: asyncio.Lock = attr.ib(factory=asyncio.Lock)
+    _all_connections: list[PooledConnection] = attr.ib(factory=list)
     _closed: bool = attr.ib(default=False)
+
+    def __attrs_post_init__(self):
+        # Semaphore needs config value, so initialize here
+        self._semaphore = asyncio.Semaphore(self.config.max_concurrent_requests)
 
     @abstractmethod
     async def start(self) -> None:
@@ -273,7 +277,7 @@ class TCPConnectionPool(BaseTCPConnectionPool):
             if len(self._all_connections) < self.config.max_connections:
                 conn: PooledConnection = await self._create_conn()
                 conn.in_use = True
-                self._all_connections.add(conn)
+                self._all_connections.append(conn)
                 return conn
 
         self.logger.debug("Pool exhausted, waiting for available connection")
@@ -293,7 +297,7 @@ class TCPConnectionPool(BaseTCPConnectionPool):
     async def _close_remove_conn(self, conn: PooledConnection) -> None:
         """Close and remove a connection from the Pool."""
         await conn.close()
-        self._all_connections.discard(conn)
+        self._all_connections.remove(conn)
 
     async def _return_connection(
         self, conn: PooledConnection, healthy: bool = True
@@ -322,7 +326,7 @@ class TCPConnectionPool(BaseTCPConnectionPool):
             await self._close_remove_conn(conn)
 
     @asynccontextmanager
-    async def aquire(self) -> AsyncIterator[PooledConnection]:
+    async def acquire(self) -> AsyncIterator[PooledConnection]:
         if self._closed:
             raise RuntimeError("Pool is closed.")
 
@@ -336,7 +340,7 @@ class TCPConnectionPool(BaseTCPConnectionPool):
                 healthy = False
                 raise
             finally:
-                await self._return_conn(conn=conn, healthy=healthy)
+                await self._return_connection(conn=conn, healthy=healthy)
 
     async def close(self) -> None:
         """Close all connections and shutdown the pool.
