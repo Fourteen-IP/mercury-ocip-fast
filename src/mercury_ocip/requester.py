@@ -1,3 +1,21 @@
+from mercury_ocip.commands.base_command import OCIRequest
+import attr
+from abc import ABC, abstractmethod
+import logging
+
+from mercury_ocip.pool import PoolConfig, TCPConnectionPool
+from mercury_ocip.libs.types import (
+    RequestResult,
+    DisconnectResult,
+    ConnectResult,
+)
+
+_XML_DECLARATION = b'<?xml version="1.0" encoding="ISO-8859-1"?>'
+_BROADSOFT_DOC_START = b'<BroadsoftDocument protocol="OCI" xmlns="C" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+_BROADSOFT_DOC_END = b"</BroadsoftDocument>"
+_SESSION_ID_TEMPLATE = b'<sessionId xmlns="">%s</sessionId>'
+
+
 class BaseRequester(ABC):
     """Base class for all requesters.
 
@@ -9,24 +27,25 @@ class BaseRequester(ABC):
         session_id (str): The session id of the requester.
     """
 
-    def __init__(
-        self,
-        logger: logging.Logger,
-        host: str,
-        port: int,
-        timeout: int,
-        session_id: str,
-    ) -> None:
-        self.logger = logger
-        self.host = host
-        self.port = port
-        self.timeout = timeout
-        self.session_id = session_id
+    host: str = attr.ib()
+    port: int = attr.ib()
+    config: PoolConfig = attr.ib(default=PoolConfig())
+    tls: bool = attr.ib(default=True)
+    logger: logging.Logger = attr.ib()
+
+    def __attrs_post_init__(self):
+        self._pool = TCPConnectionPool(
+            host=self.host,
+            port=self.port,
+            config=self.config,
+            tls=self.tls,
+            logger=self.logger,
+        )
+
+        self.session_id = self.session_id.encode("ISO-8859-1")  # Do this pre-emptively
 
     @abstractmethod
-    def send_request(
-        self, command: str
-    ) -> Union[RequestResult, Awaitable[RequestResult]]:
+    async def send_request(self, command: str) -> RequestResult:
         """Sends a request to the server.
 
         Args:
@@ -35,9 +54,9 @@ class BaseRequester(ABC):
         pass
 
     @abstractmethod
-    def connect(
+    async def connect(
         self,
-    ) -> Union[ConnectResult, Awaitable[ConnectResult]]:
+    ) -> ConnectResult:
         """Connects to the server.
 
         Returns:
@@ -47,7 +66,7 @@ class BaseRequester(ABC):
         pass
 
     @abstractmethod
-    def disconnect(self) -> Union[DisconnectResult, Awaitable[DisconnectResult]]:
+    async def disconnect(self) -> DisconnectResult:
         """Disconnects from the server."""
         pass
 
@@ -64,27 +83,17 @@ class BaseRequester(ABC):
             bytes: The serialized XML document as bytes, encoded with ISO-8859-1.
         """
 
-        ElementMaker = builder.ElementMaker(
-            namespace="C",
-            nsmap={None: "C", "xsi": "http://www.w3.org/2001/XMLSchema-instance"},
+        command_bytes = command.encode("ISO-8859-1")
+
+        return b"".join(
+            [
+                _XML_DECLARATION,
+                _BROADSOFT_DOC_START,
+                _SESSION_ID_TEMPLATE % self.session_id,
+                command_bytes,
+                _BROADSOFT_DOC_END,
+            ]
         )
-
-        session_id = etree.Element("sessionId")
-        session_id.text = self.session_id
-        session_id.set("xmlns", "")
-
-        command_element = etree.fromstring(command.encode("ISO-8859-1"))
-
-        broadsoft_doc = ElementMaker.BroadsoftDocument(
-            session_id, command_element, protocol="OCI"
-        )
-
-        return etree.tostring(
-            broadsoft_doc, xml_declaration=True, encoding="ISO-8859-1"
-        )
-
-    def __del__(self) -> None:
-        self.disconnect()
 
 
 class AsyncTCPRequester(BaseRequester):

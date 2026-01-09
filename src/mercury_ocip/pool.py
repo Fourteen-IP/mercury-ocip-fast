@@ -1,6 +1,5 @@
 from __future__ import annotations
-from lib2to3.pytree import Base
-from abc import abstractmethod
+from abc import abstractmethod, ABC
 
 import asyncio
 import attr
@@ -12,7 +11,6 @@ from dataclasses import dataclass, field
 from typing import AsyncIterator
 
 from mercury_ocip.exceptions import (
-    MError,
     MErrorSocketInitialisation,
     MErrorSocketTimeout,
 )
@@ -23,7 +21,6 @@ class PoolConfig:
     """Configuration for the connection pool."""
 
     max_connections: int = 10  # Max connections in pool
-    min_connections: int = 2  # Keep at least this many warm
     max_concurrent_requests: int = 50  # Max simultaneous in-flight requests
 
     connect_timeout: float = 10.0  # Time to establish TCP connection
@@ -37,7 +34,7 @@ class PoolConfig:
 
 
 @dataclass(slots=True)
-class PooledConnection:
+class PooledConnection(ABC):
     """A wrapper class for a TCP Connection
 
     Attributes:
@@ -97,6 +94,7 @@ class BaseTCPConnectionPool:
     _semaphore: asyncio.Semaphore = attr.ib(default=asyncio.Semaphore())
     _lock: asyncio.Lock = attr.ib(default=asyncio.Lock())
     _all_connections: set[PooledConnection] = attr.ib(default=set())
+    _closed: bool = attr.ib(default=False)
 
     @abstractmethod
     async def start(self) -> None:
@@ -296,3 +294,70 @@ class TCPConnectionPool(BaseTCPConnectionPool):
         """Close and remove a connection from the Pool."""
         await conn.close()
         self._all_connections.discard(conn)
+
+    async def _return_connection(
+        self, conn: PooledConnection, healthy: bool = True
+    ) -> None:
+        """Return a connection to the pool after use.
+
+        Args:
+            conn: The connection to return
+            healthy: False if an error occurred (connection may be broken)
+        """
+        conn.in_use = False
+
+        if not healthy or self._closed:
+            await self._close_remove_conn(conn)
+            return
+
+        if conn.is_stale(max_age_seconds=self.config.max_connection_age):
+            await self._close_remove_conn(conn)
+            return
+
+        conn.touch()
+
+        try:
+            self._pool.put_nowait(conn)
+        except asyncio.QueueFull:
+            await self._close_remove_conn(conn)
+
+    @asynccontextmanager
+    async def aquire(self) -> AsyncIterator[PooledConnection]:
+        if self._closed:
+            raise RuntimeError("Pool is closed.")
+
+        async with self._semaphore:
+            conn: PooledConnection = await self._get_or_create_conn()
+            healthy = True
+
+            try:
+                yield conn
+            except Exception:
+                healthy = False
+                raise
+            finally:
+                await self._return_conn(conn=conn, healthy=healthy)
+
+    async def close(self) -> None:
+        """Close all connections and shutdown the pool.
+
+        Call this during FastAPI shutdown:
+            @app.on_event("shutdown")
+            async def shutdown():
+                await pool.close()
+        """
+        self._closed = True
+
+        async with self._lock:
+            close_tasks = [conn.close() for conn in self._all_connections]
+            if close_tasks:
+                await asyncio.gather(*close_tasks, return_exceptions=True)
+            self._all_connections.clear()
+
+        while not self._pool.empty():
+            try:
+                self._pool.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
+        self.logger.info("Connection pool closed")
