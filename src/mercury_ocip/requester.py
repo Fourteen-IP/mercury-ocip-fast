@@ -59,7 +59,7 @@ class AsyncTCPRequester:
         """Sends a request to the server.
 
         Args:
-            command: The XML command string to send to the server.
+            command (str): The XML command string to send to the server.
 
         Returns:
             The response from the server as a decoded string.
@@ -145,7 +145,7 @@ class AsyncTCPRequester:
         wrapped in a BroadsoftDocument element with the OCI protocol.
 
         Args:
-            commands: A single command string or list of command strings.
+            commands (str | list[str]): A single command string or list of command strings.
 
         Returns:
             The serialized XML document as bytes, encoded with ISO-8859-1.
