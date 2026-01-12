@@ -54,20 +54,6 @@ class OCIType:
     def from_xml(cls, xml: str) -> "OCIType":
         return Parser.to_class_from_xml(xml, cls)
 
-    async def to_dict_async(self) -> dict[str, Any]:
-        return await AsyncParser.to_dict_from_class(self)
-
-    async def to_xml_async(self) -> str:
-        return await AsyncParser.to_xml_from_class(self)
-
-    @classmethod
-    async def from_dict_async(cls: type["OCIType"], data: dict[str, Any]) -> "OCIType":
-        return await AsyncParser.to_class_from_dict(data, cls)
-
-    @classmethod
-    async def from_xml_async(cls: type["OCIType"], xml: str) -> "OCIType":
-        return await AsyncParser.to_class_from_xml(xml, cls)
-
 
 class OCICommand(OCIType):
     def __init__(self, **kwargs):
