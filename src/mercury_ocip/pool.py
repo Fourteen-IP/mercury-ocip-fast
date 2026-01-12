@@ -110,6 +110,10 @@ class TCPConnectionPool:
 
     def __attrs_post_init__(self):
         self._semaphore = asyncio.Semaphore(self.config.max_concurrent_requests)
+        self.logger.info(
+            f"Pool initialized for {self.host}:{self.port} "
+            f"(max_conn={self.config.max_connections}, max_concurrent={self.config.max_concurrent_requests})"
+        )
 
     async def _create_conn(self) -> PooledConnection:
         """Create a new TCP connection to the BroadWorks server.
@@ -164,12 +168,16 @@ class TCPConnectionPool:
                         continue
 
                     conn.in_use = True
+                    self.logger.debug(f"Reusing pooled connection (pool size: {self._pool.qsize()})")
                     return conn
 
                 except asyncio.QueueEmpty:
                     break
 
             if len(self._all_connections) < self.config.max_connections:
+                self.logger.debug(
+                    f"Creating new connection ({len(self._all_connections)+1}/{self.config.max_connections})"
+                )
                 conn = await self._create_conn()
                 conn.in_use = True
                 self._all_connections.append(conn)
@@ -210,12 +218,20 @@ class TCPConnectionPool:
         """
         conn.in_use = False
 
-        if not healthy or self._closed:
+        if not healthy:
+            self.logger.warning("Closing unhealthy connection")
+            async with self._lock:
+                await self._close_remove_conn(conn)
+            return
+
+        if self._closed:
+            self.logger.debug("Pool closed, discarding connection")
             async with self._lock:
                 await self._close_remove_conn(conn)
             return
 
         if conn.is_stale(self.config.max_connection_age):
+            self.logger.debug("Discarding stale connection on return")
             async with self._lock:
                 await self._close_remove_conn(conn)
             return
@@ -227,13 +243,16 @@ class TCPConnectionPool:
             while self._waiters:
                 waiter = self._waiters.pop(0)
                 if not waiter.done():
+                    self.logger.debug(f"Handing connection to waiter ({len(self._waiters)} still waiting)")
                     waiter.set_result(conn)
                     return
 
             # No waiters, return to pool
             try:
                 self._pool.put_nowait(conn)
+                self.logger.debug(f"Returned connection to pool (pool size: {self._pool.qsize()})")
             except asyncio.QueueFull:
+                self.logger.warning("Pool queue full, closing connection")
                 await self._close_remove_conn(conn)
 
     @asynccontextmanager
@@ -266,6 +285,45 @@ class TCPConnectionPool:
                 raise
             finally:
                 await self._return_connection(conn, healthy)
+
+    async def warm(self, count: int | None = None) -> int:
+        """Pre-create connections to avoid cold-start latency.
+
+        Args:
+            count: Number of connections to create. Defaults to max_connections.
+
+        Returns:
+            Number of connections actually created.
+        """
+        if count is None:
+            count = self.config.max_connections
+
+        async with self._lock:
+            existing = len(self._all_connections)
+            to_create = min(count, self.config.max_connections) - existing
+
+            if to_create <= 0:
+                return 0
+
+        self.logger.info(f"Warming pool with {to_create} connections...")
+
+        tasks = [self._create_conn() for _ in range(to_create)]
+        connections = await asyncio.gather(*tasks, return_exceptions=True)
+
+        created = 0
+        failed = 0
+        async with self._lock:
+            for conn in connections:
+                if isinstance(conn, PooledConnection):
+                    self._all_connections.append(conn)
+                    self._pool.put_nowait(conn)
+                    created += 1
+                else:
+                    failed += 1
+                    self.logger.warning(f"Failed to create connection during warm: {conn}")
+
+        self.logger.info(f"Warmed pool with {created} connections ({failed} failed)")
+        return created
 
     async def close(self) -> None:
         """Close all connections and shutdown the pool."""
