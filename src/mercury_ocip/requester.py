@@ -1,14 +1,10 @@
 import attr
 import logging
 import asyncio
+from itertools import batched
 from typing import Union
 
 from mercury_ocip.pool import PoolConfig, TCPConnectionPool
-from mercury_ocip.libs.types import (
-    RequestResult,
-    DisconnectResult,
-    ConnectResult,
-)
 from mercury_ocip.exceptions import MErrorSocketTimeout, MErrorSendRequestFailed
 
 _XML_DECLARATION = b'<?xml version="1.0" encoding="ISO-8859-1"?>'
@@ -36,8 +32,8 @@ class AsyncTCPRequester:
     tls: bool = attr.ib(default=True)
     logger: logging.Logger = attr.ib()
     session_id: str = attr.ib()
-    _pool: TCPConnectionPool = attr.ib(default=None)
-    _session_id_bytes: bytes = attr.ib(default=None)
+    _pool: TCPConnectionPool | None = attr.ib(default=None)
+    _session_id_bytes: bytes | None = attr.ib(default=None)
 
     def __attrs_post_init__(self):
         self._pool = TCPConnectionPool(
@@ -50,98 +46,121 @@ class AsyncTCPRequester:
 
         self._session_id_bytes: bytes = self.session_id.encode("ISO-8859-1")
 
-    async def disconnect(self) -> DisconnectResult:
-        """Disconnects from the server."""
-        pass
+    async def close(self) -> None:
+        """Disconnects from the server and closes the pool."""
+        if self._pool:
+            try:
+                self._pool.close()
+                self.logger.debug("Connection pool closed")
+            except Exception as e:
+                self.logger.warning(f"Error closing connection pool: {e}")
 
-    async def send_request(self, command: str) -> RequestResult:
+    async def send_request(self, command: str) -> str:
         """Sends a request to the server.
 
         Args:
-            command (BroadworksCommand): The command to send to the server.
+            command: The XML command string to send to the server.
 
         Returns:
-            Any: The response from the server.
+            The response from the server as a decoded string.
+
+        Raises:
+            MErrorSendRequestFailed: If the request fails to send.
+            MErrorSocketTimeout: If the socket read times out.
         """
+        self.logger.debug(f"Sending command to {self.host}")
+        return await self._send_bytes(self._build_oci_xml(command))
 
-        try:
-            async with self._pool.acquire() as conn:
-                command_bytes: bytes = self.build_oci_xml(command=command)
+    async def send_bulk_request(
+        self, commands: list[str], batch_size: int = 15
+    ) -> list[str]:
+        """Sends multiple requests to the server in batches.
 
-                self.logger.debug(f"Sending command to {self.host}: {command}")
+        Batches are variable but default to 15 as per the OCIP Spec: "4.3: It is recommended to limit the number of actions to no more than 15 transactions"
 
-                conn.writer.write(command_bytes + b"\n")
-                await conn.writer.drain()
+        Args:
+            commands (list[str]): The commands to send to the server.
+            batch_size (int): The amount of commands per message
 
-                content = b""
+        Returns:
+            List of responses from the server, one per batch.
 
-                while True:
-                    try:
-                        chunk: bytes = await asyncio.wait_for(
-                            conn.reader.read(self.config.read_chunk_size),
-                            timeout=self.config.read_timeout,
-                        )
-                    except asyncio.TimeoutError as e:
-                        self.logger.error(
-                            msg=f"Socket read timed out in {self.__class__.__name__}: {e}"
-                        )
-                        return MErrorSocketTimeout(str(e))
+        Raises:
+            MErrorSendRequestFailed: If any batch fails to send.
+            MErrorSocketTimeout: If the socket read times out.
+        """
+        chunks = [list(chunk) for chunk in batched(commands, n=batch_size)]
+        results: list[str] = []
 
-                    if not chunk:
-                        break
+        self.logger.debug(f"Sending {len(commands)} commands in {len(chunks)} batches")
 
-                    content += chunk
-
-                    if b"</BroadsoftDocument>" in content:
-                        break
-                return content.rstrip(b"\n").decode("ISO-8859-1")
-        except Exception as e:
-            self.logger.error(
-                msg=f"Failed to send command over {self.__class__.__name__}: {e}"
+        for i, chunk in enumerate(chunks, 1):
+            self.logger.debug(
+                f"Sending batch {i}/{len(chunks)} ({len(chunk)} commands)"
             )
-            return MErrorSendRequestFailed(str(e))
+            response = await self._send_bytes(self._build_oci_xml(chunk))
+            results.append(response)
 
-    def build_oci_xml(self, command: Union[str, list[str]]) -> bytes:
-        """Builds an OCI XML request from the given BroadworksCommand.
+        return results
 
-        Constructs an XML document with a session ID and the encoded command,
+    async def _send_bytes(self, payload: bytes) -> str:
+        if self._pool is None:
+            raise MErrorSendRequestFailed("Pool failed to initialise")
+
+        async with self._pool.acquire() as conn:
+            self.logger.debug(f"Sending {len(payload)} bytes to {self.host}")
+
+            conn.writer.write(payload + b"\n")
+            await conn.writer.drain()
+
+            content = b""
+
+            while True:
+                try:
+                    chunk: bytes = await asyncio.wait_for(
+                        conn.reader.read(self.config.read_chunk_size),
+                        timeout=self.config.read_timeout,
+                    )
+                except asyncio.TimeoutError as e:
+                    self.logger.error(
+                        f"Socket read timed out after {self.config.read_timeout}s: {e}"
+                    )
+                    raise MErrorSocketTimeout(str(e))
+
+                if not chunk:
+                    break
+
+                content += chunk
+
+                if b"</BroadsoftDocument>" in content:
+                    break
+
+            self.logger.debug(f"Received {len(content)} bytes from {self.host}")
+            return content.rstrip(b"\n").decode("ISO-8859-1")
+
+    def _build_oci_xml(self, commands: Union[str, list[str]]) -> bytes:
+        """Builds an OCI XML request from the given command(s).
+
+        Constructs an XML document with a session ID and the encoded command(s),
         wrapped in a BroadsoftDocument element with the OCI protocol.
 
         Args:
-            command (BroadworksCommand): The command to be encoded into the XML.
+            commands: A single command string or list of command strings.
 
         Returns:
-            bytes: The serialized XML document as bytes, encoded with ISO-8859-1.
+            The serialized XML document as bytes, encoded with ISO-8859-1.
         """
-
-        if isinstance(command, list):
-            command_bytes_list = [command for command in command]
-            commands_payload: bytes = "\n".join(command_bytes_list).encode("ISO-8859-1")
-
-            return b"".join(
-                [
-                    _XML_DECLARATION,
-                    _BROADSOFT_DOC_START,
-                    _SESSION_ID_TEMPLATE % self._session_id_bytes,
-                    commands_payload,
-                    _BROADSOFT_DOC_END,
-                ]
-            )
+        if isinstance(commands, list):
+            commands_payload = "\n".join(commands).encode("ISO-8859-1")
         else:
-            command_bytes = command.encode("ISO-8859-1")
+            commands_payload = commands.encode("ISO-8859-1")
 
-            return b"".join(
-                [
-                    _XML_DECLARATION,
-                    _BROADSOFT_DOC_START,
-                    _SESSION_ID_TEMPLATE % self._session_id_bytes,
-                    command_bytes,
-                    _BROADSOFT_DOC_END,
-                ]
-            )
-
-    async def connect():
-        pass
-
-    async def send_bulk_request(self, commands: list[str]) -> list[RequestResult]:
-        pass
+        return b"".join(
+            [
+                _XML_DECLARATION,
+                _BROADSOFT_DOC_START,
+                _SESSION_ID_TEMPLATE % self._session_id_bytes,
+                commands_payload,
+                _BROADSOFT_DOC_END,
+            ]
+        )
