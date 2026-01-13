@@ -1,5 +1,5 @@
-from mercury_ocip.utils.parser import Parser
-from mercury_ocip.commands.commands import (
+from mercury_ocip_fast.utils.parser import Parser
+from mercury_ocip_fast.commands.commands import (
    UserConsolidatedModifyRequest22, 
    ReplacementConsolidatedServicePackAssignmentList,
    ConsolidatedServicePackAssignment,
@@ -11,7 +11,7 @@ from mercury_ocip.commands.commands import (
    ServiceInstanceAddProfile,
    GroupGetListInSystemResponse
 )
-from mercury_ocip.commands.base_command import OCITable, OCITableRow
+from mercury_ocip_fast.commands.base_command import OCITable, OCITableRow
 
 def test_parser_to_xml_from_class():
     command = UserConsolidatedModifyRequest22(user_id="testuser")

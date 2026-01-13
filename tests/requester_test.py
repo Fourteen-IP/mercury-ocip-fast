@@ -1,314 +1,421 @@
+"""Tests for mercury_ocip_fast.requester module."""
+
 import pytest
-from unittest.mock import Mock, patch, AsyncMock
-import sys
-import os
-from lxml import etree
-import socket
+import asyncio
+from unittest.mock import Mock, AsyncMock, patch, MagicMock
+from contextlib import asynccontextmanager
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
-from mercury_ocip.requester import (
-    SyncTCPRequester,
-    SyncSOAPRequester,
-    AsyncSOAPRequester,
-    AsyncTCPRequester,
-)
-from mercury_ocip.exceptions import (
-    MErrorSocketInitialisation,
-    MErrorSocketTimeout,
-    MErrorClientInitialisation,
-    MErrorSendRequestFailed,
-)
-from mercury_ocip.commands import base_command as BroadworksCommand
-
-
-@pytest.fixture
-def mock_logger():
-    return Mock()
-
-
-@pytest.fixture
-def mock_command():
-    cmd = Mock()
-    cmd.encode.return_value = b"""
-<BroadsoftDocument xmlns:xsi="http://www.w3.org/2001/XMLSchema-requester">
-  <command xmlns="" xsi:type="LoginRequest22V5"></command>
-</BroadsoftDocument>
-"""
-    return cmd
-
-
-def test_build_oci_xml_creates_correct_structure(mock_logger):
-    requester = SyncSOAPRequester.__new__(SyncSOAPRequester)
-    requester.client = None
-    requester.logger = mock_logger
-    requester.session_id = "123214235235235"
-
-    mock_command = Mock()
-    mock_command.encode.return_value = """
-    <command xmlns="" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="AuthenticationRequest">
-    <userId>vinny</userId>
-    </command>"""
-
-    result = requester.build_oci_xml(mock_command)
-    root = etree.fromstring(result)
-
-    assert root.tag == "{C}BroadsoftDocument"
-
-    session_el = root.find("sessionId")
-    assert session_el is not None
-    assert session_el.text == "123214235235235"
-
-    command_el = root.find("command")
-    assert command_el is not None
-    assert (
-        command_el.attrib.get("{http://www.w3.org/2001/XMLSchema-instance}type")
-        == "AuthenticationRequest"
-    )
-
-    user_id_el = command_el.find("userId")
-    assert user_id_el is not None
-    assert user_id_el.text == "vinny"
-
-
-class TestSyncTCPRequester:
-    @patch("socket.create_connection")
-    @patch("ssl.create_default_context")
-    def test_init_and_connect_ssl_success(
-        self, mock_ssl_context, mock_create_connection, mock_logger
-    ):
-        mock_socket = Mock()
-        mock_create_connection.return_value = mock_socket
-
-        mock_ssl = Mock()
-        mock_ssl.wrap_socket.return_value = "wrapped_socket"
-        mock_ssl_context.return_value = mock_ssl
-
-        requester = SyncTCPRequester(
-            logger=mock_logger, host="localhost", port=2209, tls=True
-        )
-        result = requester.connect()
-
-        assert requester.sock == "wrapped_socket"
-        mock_create_connection.assert_called_once_with(("localhost", 2209), timeout=30)
-        mock_ssl.wrap_socket.assert_called_once_with(
-            mock_socket, server_hostname="localhost"
-        )
-        mock_logger.info.assert_called()
-        assert result is None
-
-    @patch("socket.create_connection")
-    @patch("ssl.create_default_context")
-    def test_connect_ssl_failure(
-        self, mock_ssl_context, mock_create_connection, mock_logger
-    ):
-        mock_create_connection.side_effect = Exception("Failed to connect")
-
-        requester = SyncTCPRequester(
-            logger=mock_logger, host="localhost", port=2209, tls=True
-        )
-        result = requester.connect()
-
-        assert requester.sock is None
-        assert isinstance(result, MErrorSocketInitialisation)
-        mock_logger.error.assert_called()
-
-    def test_sync_tcp_send_request_success(self, mock_logger):
-        requester = SyncTCPRequester.__new__(SyncTCPRequester)
-        requester.logger = mock_logger
-        requester.host = "localhost"
-        requester.port = 2209
-        requester.timeout = 30
-        requester.session_id = ""
-        fake_sock = Mock()
-        fake_sock.sendall = Mock()
-        fake_sock.recv = Mock(side_effect=[b"<BroadsoftDocument>", b"<command/>", b"</BroadsoftDocument>"])
-        requester.sock = fake_sock
-
-        mock_command = Mock()
-        with patch.object(requester, "build_oci_xml", return_value=b"<mock-xml>"):
-            result = requester.send_request(mock_command)
-
-        assert isinstance(result, str)
-        assert "</BroadsoftDocument>" in result
-        fake_sock.sendall.assert_called_once()
-
-    def test_sync_tcp_send_request_recv_timeout_returns_MError(self, mock_logger):
-        mock_logger = Mock()
-        requester = SyncTCPRequester.__new__(SyncTCPRequester)
-        requester.logger = mock_logger
-        requester.host = "localhost"
-        requester.port = 2209
-        requester.timeout = 30
-        requester.session_id = ""
-        fake_sock = Mock()
-        fake_sock.sendall = Mock()
-        fake_sock.recv = Mock(side_effect=socket.timeout("timed out"))
-        requester.sock = fake_sock
-
-        mock_command = Mock()
-        with patch.object(requester, "build_oci_xml", return_value=b"<mock-xml>"):
-            result = requester.send_request(mock_command)
-
-        assert isinstance(result, MErrorSocketTimeout)
-
-
-class TestSyncSOAPRequester:
-    @patch("mercury_ocip.requester.requests.sessions.Session")
-    @patch("mercury_ocip.requester.Settings")
-    @patch("mercury_ocip.requester.Transport")
-    @patch("mercury_ocip.requester.Client")
-    def test_connect_success(
-        self, mock_client_class, mock_transport, mock_settings, mock_session
-    ):
-        mock_logger = Mock()
-        requester = SyncSOAPRequester(logger=mock_logger, host="localhost", port=2209)
-
-        assert requester.client is not None
-        assert requester.zclient is not None
-        mock_logger.info.assert_called_once_with(
-            "Initiated socket on SyncSOAPRequester: localhost:2209"
-        )
-
-    @patch(
-        "mercury_ocip.requester.requests.sessions.Session",
-        side_effect=Exception("Session error"),
-    )
-    def test_connect_fail(self, mock_session):
-        mock_logger = Mock()
-        requester = SyncSOAPRequester.__new__(SyncSOAPRequester)
-        requester.logger = mock_logger
-        requester.host = "localhost"
-        requester.port = 2209
-        requester.timeout = 10
-        requester.client = None
-
-        result = requester.connect()
-
-        assert isinstance(result, MErrorClientInitialisation)
-        mock_logger.error.assert_called_once()
-        mock_logger.info.assert_not_called()
-
-    def test_disconnect_closes_session(self):
-        mock_logger = Mock()
-        mock_client = Mock()
-
-        requester = SyncSOAPRequester.__new__(SyncSOAPRequester)
-        requester.logger = mock_logger
-        requester.client = mock_client
-
-        requester.disconnect()
-
-        mock_client.close.assert_called_once()
-        assert requester.client is None
-
-    def test_disconnect_handles_exception(self):
-        mock_logger = Mock()
-        bad_client = Mock()
-        bad_client.close.side_effect = Exception("close failed")
-
-        requester = SyncSOAPRequester.__new__(SyncSOAPRequester)
-        requester.logger = mock_logger
-        requester.client = bad_client
-
-        requester.disconnect()
-
-        mock_logger.warning.assert_called_once()
-        assert requester.client is None
-
-    @patch.object(SyncSOAPRequester, "build_oci_xml")
-    def test_send_request_success(self, mock_build_xml):
-        mock_logger = Mock()
-        requester = SyncSOAPRequester.__new__(SyncSOAPRequester)
-        requester.logger = mock_logger
-        requester.zclient = Mock()
-        requester.zclient.service.processOCIMessage = Mock(
-            return_value="<xml>response</xml>"
-        )
-
-        mock_command = Mock(spec=BroadworksCommand)
-
-        result = requester.send_request(mock_command)
-
-        assert result == "<xml>response</xml>"
-        mock_build_xml.assert_called_once_with(mock_command)
-
-    @patch.object(
-        SyncSOAPRequester, "build_oci_xml", side_effect=Exception("build failed")
-    )
-    def test_send_request_fail(self, mock_build_xml):
-        mock_logger = Mock()
-        requester = SyncSOAPRequester.__new__(SyncSOAPRequester)
-        requester.logger = mock_logger
-        requester.zclient = Mock()
-
-        mock_command = Mock(spec=BroadworksCommand)
-
-        result = requester.send_request(mock_command)
-
-        assert isinstance(result, MErrorSendRequestFailed)
-        mock_logger.error.assert_called_once()
+from mercury_ocip_fast.requester import AsyncTCPRequester
+from mercury_ocip_fast.pool import PoolConfig, PooledConnection
+from mercury_ocip_fast.exceptions import MError, MErrorSocketTimeout
 
 
 class TestAsyncTCPRequester:
-    @pytest.mark.asyncio
-    async def test_send_request_success(self):
-        mock_logger = Mock()
+    """Tests for AsyncTCPRequester."""
 
-        async def fake_command():
-            return "mocked_command"
+    @pytest.fixture
+    def mock_logger(self):
+        return Mock(spec=["info", "debug", "warning", "error"])
 
-        mock_command = fake_command()
-
-        requester = AsyncTCPRequester.__new__(AsyncTCPRequester)
-        requester.logger = mock_logger
-        requester.host = "localhost"
-        requester.port = 2209
-        requester.timeout = 10
-        requester.session_id = None
-
-        requester.reader = AsyncMock()
-        requester.writer = AsyncMock()
-        requester.writer.drain = AsyncMock()
-        requester.reader.read = AsyncMock(
-            side_effect=[b"<data></BroadsoftDocument>", b""]
+    @pytest.fixture
+    def pool_config(self):
+        return PoolConfig(
+            max_connections=5,
+            connect_timeout=1.0,
+            read_timeout=1.0,
+            read_chunk_size=4096,
         )
 
-        with patch.object(requester, "build_oci_xml", return_value=b"<mocked-xml>"):
-            result = await requester.send_request(mock_command)
+    @pytest.fixture
+    def mock_pool(self):
+        """Create a mock pool."""
+        pool = Mock()
+        pool.warm = AsyncMock()
+        pool.close = AsyncMock()
+        pool.acquire = MagicMock()
+        return pool
 
-            assert isinstance(result, str)
-            assert "data" in result
-            requester.writer.write.assert_called_once()
-            requester.writer.drain.assert_called_once()
-
-
-class TestAsyncSOAPRequester:
-    @pytest.mark.asyncio
-    async def test_send_request_success(self):
-        mock_logger = Mock()
-
-        async def fake_command():
-            return "mocked_command"
-
-        mock_command = fake_command()
-
-        requester = AsyncSOAPRequester.__new__(AsyncSOAPRequester)
-        requester.logger = mock_logger
-        requester.host = "localhost"
-        requester.port = 2209
-        requester.timeout = 10
-        requester.session_id = None
-
-        requester.async_client = Mock()
-        requester.wsdl_client = Mock()
-        requester.zeep_client = Mock()
-        requester.zeep_client.service.processOCIMessage = AsyncMock(
-            return_value="soap response"
+    @pytest.fixture
+    def requester(self, mock_logger, pool_config):
+        return AsyncTCPRequester(
+            host="localhost",
+            port=2209,
+            config=pool_config,
+            tls=False,
+            session_id="test-session-123",
+            logger=mock_logger,
         )
 
-        with patch.object(requester, "build_oci_xml", return_value=b"<mocked-xml>"):
-            result = await requester.send_request(mock_command)
+    @pytest.fixture
+    def requester_with_mock_pool(self, mock_logger, pool_config, mock_pool):
+        """Create a requester with a mocked pool."""
+        req = AsyncTCPRequester(
+            host="localhost",
+            port=2209,
+            config=pool_config,
+            tls=False,
+            session_id="test-session-123",
+            logger=mock_logger,
+        )
+        object.__setattr__(req, "_pool", mock_pool)
+        return req
 
-            assert result == "soap response"
-            requester.zeep_client.service.processOCIMessage.assert_called_once()
+    def test_initialization(self, requester, mock_logger):
+        """Test requester initializes with correct attributes."""
+        assert requester.host == "localhost"
+        assert requester.port == 2209
+        assert requester.tls is False
+        assert requester.session_id == "test-session-123"
+        assert requester._pool is not None
+        assert requester._session_id_bytes == b"test-session-123"
+        mock_logger.info.assert_called()
+
+    def test_initialization_with_tls(self, mock_logger, pool_config):
+        """Test requester initializes with TLS enabled."""
+        requester = AsyncTCPRequester(
+            host="secure.example.com",
+            port=2209,
+            config=pool_config,
+            tls=True,
+            session_id="secure-session",
+            logger=mock_logger,
+        )
+
+        assert requester.tls is True
+        assert requester._pool.tls is True
+
+    def test_build_oci_xml_single_command(self, requester):
+        """Test _build_oci_xml creates correct XML for single command."""
+        command = '<command xmlns="" xsi:type="TestCommand"><param>value</param></command>'
+        result = requester._build_oci_xml(command)
+
+        assert isinstance(result, bytes)
+        assert b'<?xml version="1.0" encoding="ISO-8859-1"?>' in result
+        assert b'<BroadsoftDocument protocol="OCI"' in result
+        assert b"<sessionId" in result
+        assert b"test-session-123" in result
+        assert b"TestCommand" in result
+        assert b"</BroadsoftDocument>" in result
+
+    def test_build_oci_xml_multiple_commands(self, requester):
+        """Test _build_oci_xml creates correct XML for multiple commands."""
+        commands = [
+            '<command xmlns="" xsi:type="Command1"></command>',
+            '<command xmlns="" xsi:type="Command2"></command>',
+        ]
+        result = requester._build_oci_xml(commands)
+
+        assert isinstance(result, bytes)
+        assert b"Command1" in result
+        assert b"Command2" in result
+        # Commands should be joined with newline
+        assert result.count(b"<command") == 2
+
+    def test_build_oci_xml_encodes_special_characters(self, requester):
+        """Test _build_oci_xml handles ISO-8859-1 encoding."""
+        command = '<command><param>café</param></command>'
+        result = requester._build_oci_xml(command)
+
+        assert isinstance(result, bytes)
+        assert "café".encode("ISO-8859-1") in result
+
+    @pytest.mark.asyncio
+    async def test_send_request_success(self, requester_with_mock_pool, mock_pool):
+        """Test send_request successfully sends and receives data."""
+        mock_reader = AsyncMock()
+        mock_writer = AsyncMock()
+        mock_writer.writelines = Mock()
+        mock_writer.drain = AsyncMock()
+
+        # Simulate response chunks
+        mock_reader.read = AsyncMock(
+            side_effect=[
+                b'<?xml version="1.0"?><BroadsoftDocument>',
+                b'<command xsi:type="TestResponse"/></BroadsoftDocument>',
+            ]
+        )
+
+        mock_conn = MagicMock(spec=PooledConnection)
+        mock_conn.reader = mock_reader
+        mock_conn.writer = mock_writer
+
+        @asynccontextmanager
+        async def mock_acquire():
+            yield mock_conn
+
+        mock_pool.acquire = mock_acquire
+
+        result = await requester_with_mock_pool.send_request("<command>test</command>")
+
+        assert isinstance(result, str)
+        assert "BroadsoftDocument" in result
+        assert "TestResponse" in result
+        mock_writer.writelines.assert_called_once()
+        mock_writer.drain.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_send_request_timeout(self, requester_with_mock_pool, mock_pool):
+        """Test send_request raises MErrorSocketTimeout on read timeout."""
+        mock_reader = AsyncMock()
+        mock_writer = AsyncMock()
+        mock_writer.writelines = Mock()
+        mock_writer.drain = AsyncMock()
+        mock_reader.read = AsyncMock(side_effect=asyncio.TimeoutError())
+
+        mock_conn = MagicMock(spec=PooledConnection)
+        mock_conn.reader = mock_reader
+        mock_conn.writer = mock_writer
+
+        @asynccontextmanager
+        async def mock_acquire():
+            yield mock_conn
+
+        mock_pool.acquire = mock_acquire
+
+        with pytest.raises(MErrorSocketTimeout):
+            await requester_with_mock_pool.send_request("<command>test</command>")
+
+    @pytest.mark.asyncio
+    async def test_send_request_pool_not_initialized(self, requester):
+        """Test send_request raises MError when pool is None."""
+        requester._pool = None
+
+        with pytest.raises(MError) as exc_info:
+            await requester.send_request("<command>test</command>")
+
+        assert "Pool failed" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_send_bulk_request_batches_commands(self, requester_with_mock_pool, mock_pool, mock_logger):
+        """Test send_bulk_request batches commands correctly."""
+        mock_reader = AsyncMock()
+        mock_writer = AsyncMock()
+        mock_writer.writelines = Mock()
+        mock_writer.drain = AsyncMock()
+        mock_reader.read = AsyncMock(
+            return_value=b'<BroadsoftDocument><command/></BroadsoftDocument>'
+        )
+
+        mock_conn = MagicMock(spec=PooledConnection)
+        mock_conn.reader = mock_reader
+        mock_conn.writer = mock_writer
+
+        @asynccontextmanager
+        async def mock_acquire():
+            yield mock_conn
+
+        mock_pool.acquire = mock_acquire
+
+        commands = [f"<command{i}/>" for i in range(25)]
+        results = await requester_with_mock_pool.send_bulk_request(commands, batch_size=10)
+
+        # 25 commands with batch_size=10 should create 3 batches
+        assert len(results) == 3
+        mock_logger.info.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_send_bulk_request_preserves_order(self, requester_with_mock_pool, mock_pool):
+        """Test send_bulk_request preserves response order."""
+        call_count = 0
+        mock_reader = AsyncMock()
+        mock_writer = AsyncMock()
+        mock_writer.writelines = Mock()
+        mock_writer.drain = AsyncMock()
+
+        async def read_response(_size):
+            nonlocal call_count
+            call_count += 1
+            return f"<BroadsoftDocument><response batch={call_count}/></BroadsoftDocument>".encode()
+
+        mock_reader.read = read_response
+
+        mock_conn = MagicMock(spec=PooledConnection)
+        mock_conn.reader = mock_reader
+        mock_conn.writer = mock_writer
+
+        @asynccontextmanager
+        async def mock_acquire():
+            yield mock_conn
+
+        mock_pool.acquire = mock_acquire
+
+        commands = ["<cmd1/>", "<cmd2/>", "<cmd3/>"]
+        results = await requester_with_mock_pool.send_bulk_request(commands, batch_size=1)
+
+        assert len(results) == 3
+        assert "batch=1" in results[0]
+        assert "batch=2" in results[1]
+        assert "batch=3" in results[2]
+
+    @pytest.mark.asyncio
+    async def test_send_bulk_request_default_batch_size(self, requester_with_mock_pool, mock_pool):
+        """Test send_bulk_request uses default batch size of 15."""
+        mock_reader = AsyncMock()
+        mock_writer = AsyncMock()
+        mock_writer.writelines = Mock()
+        mock_writer.drain = AsyncMock()
+        mock_reader.read = AsyncMock(
+            return_value=b'<BroadsoftDocument><command/></BroadsoftDocument>'
+        )
+
+        mock_conn = MagicMock(spec=PooledConnection)
+        mock_conn.reader = mock_reader
+        mock_conn.writer = mock_writer
+
+        call_count = 0
+
+        @asynccontextmanager
+        async def mock_acquire():
+            nonlocal call_count
+            call_count += 1
+            yield mock_conn
+
+        mock_pool.acquire = mock_acquire
+
+        # 30 commands should create 2 batches with default size of 15
+        commands = [f"<cmd{i}/>" for i in range(30)]
+        await requester_with_mock_pool.send_bulk_request(commands)
+
+        assert call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_warm_delegates_to_pool(self, requester_with_mock_pool, mock_pool):
+        """Test warm() delegates to pool.warm()."""
+        mock_pool.warm.return_value = 5
+        result = await requester_with_mock_pool.warm(count=5)
+
+        assert result == 5
+        mock_pool.warm.assert_called_once_with(5)
+
+    @pytest.mark.asyncio
+    async def test_warm_returns_zero_when_pool_none(self, requester):
+        """Test warm() returns 0 when pool is None."""
+        requester._pool = None
+        result = await requester.warm(count=5)
+
+        assert result == 0
+
+    @pytest.mark.asyncio
+    async def test_close_delegates_to_pool(self, requester_with_mock_pool, mock_pool, mock_logger):
+        """Test close() delegates to pool.close()."""
+        await requester_with_mock_pool.close()
+
+        mock_pool.close.assert_called_once()
+        mock_logger.debug.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_close_handles_exception(self, requester_with_mock_pool, mock_pool, mock_logger):
+        """Test close() handles pool close exceptions gracefully."""
+        mock_pool.close.side_effect = Exception("Close failed")
+
+        # Should not raise
+        await requester_with_mock_pool.close()
+
+        mock_logger.warning.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_send_bytes_reads_until_document_end(self, requester_with_mock_pool, mock_pool):
+        """Test _send_bytes reads chunks until </BroadsoftDocument> is found."""
+        mock_reader = AsyncMock()
+        mock_writer = AsyncMock()
+        mock_writer.writelines = Mock()
+        mock_writer.drain = AsyncMock()
+
+        # Simulate response split across multiple chunks
+        mock_reader.read = AsyncMock(
+            side_effect=[
+                b'<?xml version="1.0"?>',
+                b"<BroadsoftDocument>",
+                b"<sessionId>123</sessionId>",
+                b"<command/>",
+                b"</BroadsoftDocument>",
+            ]
+        )
+
+        mock_conn = MagicMock(spec=PooledConnection)
+        mock_conn.reader = mock_reader
+        mock_conn.writer = mock_writer
+
+        @asynccontextmanager
+        async def mock_acquire():
+            yield mock_conn
+
+        mock_pool.acquire = mock_acquire
+
+        result = await requester_with_mock_pool._send_bytes(b"<test/>")
+
+        assert "BroadsoftDocument" in result
+        assert "sessionId" in result
+        assert result.endswith("</BroadsoftDocument>")
+
+    @pytest.mark.asyncio
+    async def test_send_bytes_handles_empty_chunks(self, requester_with_mock_pool, mock_pool):
+        """Test _send_bytes stops on empty chunk (connection closed)."""
+        mock_reader = AsyncMock()
+        mock_writer = AsyncMock()
+        mock_writer.writelines = Mock()
+        mock_writer.drain = AsyncMock()
+
+        # Simulate connection closing before complete response
+        mock_reader.read = AsyncMock(
+            side_effect=[b"<partial>data", b""]
+        )
+
+        mock_conn = MagicMock(spec=PooledConnection)
+        mock_conn.reader = mock_reader
+        mock_conn.writer = mock_writer
+
+        @asynccontextmanager
+        async def mock_acquire():
+            yield mock_conn
+
+        mock_pool.acquire = mock_acquire
+
+        result = await requester_with_mock_pool._send_bytes(b"<test/>")
+
+        assert result == "<partial>data"
+
+
+class TestAsyncTCPRequesterIntegration:
+    """Integration-style tests for AsyncTCPRequester."""
+
+    @pytest.fixture
+    def mock_logger(self):
+        return Mock(spec=["info", "debug", "warning", "error"])
+
+    @pytest.mark.asyncio
+    async def test_full_request_response_cycle(self, mock_logger):
+        """Test a complete request-response cycle with mocked network."""
+        requester = AsyncTCPRequester(
+            host="test.example.com",
+            port=2209,
+            tls=False,
+            session_id="integration-test-session",
+            logger=mock_logger,
+        )
+
+        mock_reader = AsyncMock()
+        mock_writer = AsyncMock()
+        mock_writer.writelines = Mock()
+        mock_writer.drain = AsyncMock()
+        mock_writer.close = Mock()
+        mock_writer.wait_closed = AsyncMock()
+
+        response_xml = b'''<?xml version="1.0" encoding="ISO-8859-1"?>
+<BroadsoftDocument protocol="OCI" xmlns="C">
+<sessionId>integration-test-session</sessionId>
+<command xsi:type="LoginResponse22V5" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+<loginType>System</loginType>
+</command>
+</BroadsoftDocument>'''
+
+        mock_reader.read = AsyncMock(return_value=response_xml)
+
+        with patch("asyncio.open_connection", return_value=(mock_reader, mock_writer)):
+            command = '<command xmlns="" xsi:type="LoginRequest22V5"><userId>admin</userId></command>'
+            result = await requester.send_request(command)
+
+            assert "LoginResponse22V5" in result
+            assert "loginType" in result
+
+        await requester.close()

@@ -286,6 +286,8 @@ class Client:
 
         if type_name == "ErrorResponse":
             return ErrorResponse.from_dict(command_data)
+        elif type_name == "SuccessResponse":
+            return SuccessResponse.from_dict(command_data)
 
         response_class = getattr(commands, type_name, None)
 

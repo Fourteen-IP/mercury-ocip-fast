@@ -1,25 +1,51 @@
 # Mercury
 
-[![Downloads](https://static.pepy.tech/badge/mercury-ocip)](https://pepy.tech/project/mercury-ocip)
-[![Downloads](https://static.pepy.tech/badge/mercury-ocip/month)](https://pepy.tech/project/mercury-ocip)
-[![Downloads](https://static.pepy.tech/badge/mercury-ocip/week)](https://pepy.tech/project/mercury-ocip)
-[![pypi version](https://img.shields.io/pypi/v/mercury-ocip.svg)](https://pypi.python.org/pypi/mercury-ocip)
+[![Downloads](https://static.pepy.tech/badge/mercury-ocip)](https://pepy.tech/project/mercury-ocip-fast)
+[![Downloads](https://static.pepy.tech/badge/mercury-ocip/month)](https://pepy.tech/project/mercury-ocip-fast)
+[![Downloads](https://static.pepy.tech/badge/mercury-ocip/week)](https://pepy.tech/project/mercury-ocip-fast)
+[![pypi version](https://img.shields.io/pypi/v/mercury-ocip.svg)](https://pypi.python.org/pypi/mercury-ocip-fast)
 
-# Mercury
+# mercury-ocip-fast
 
-**Mercury** is an SDK for interfacing with Broadworks OCIP interface either via TCP or SOAP.
+**mercury-ocip-fast** is a lightning fast SDK for interfacing with Broadworks OCIP via TCP.
 
-- [Documentation](https://mercury-docs.14ip.net/)
-
----
+- [Documentation](https://mercury-fast-docs.14ip.net/)
 
 ## Overview
 
-**Mercury** has extensive documentation, automation, and more to better manage Broadworks instances.
+mercury-ocip-fast is a lightning fast and async-first Python SDK for BroadWorks OCI-P. It uses connection pooling and concurrent request batching to handle bulk operations efficiently.
 
-The package is currently actively managed by the Dev Team at [Fourteen IP](https://fourteenip.com/) the leading solution of hosted telephony in the hospitality industry. The team is working with the whole company including platform and telephony engineers with decades of experience.
+---
 
-The goal of the solution is to ease the management of Broadworks and give engineers tooling to better configure and administrate.
+```python
+from mercury_ocip_fast import Client
+from mercury_ocip_fast.commands import UserGetRequest21sp1
+
+async with Client(
+        host="broadworks.server",
+        username="admin",
+        password="secret"
+    ) as client:
+    # single request
+    response = await client.command(UserGetRequest21sp1(user_id="user@example.com"))
+
+    # bulk requests - batched and processed concurrently
+    users = ["user1@example.com", "user2@example.com", "user3@example.com"]
+    responses = await client.command([UserGetRequest21sp1(user_id=u) for u in users])
+```
+
+---
+
+![Async vs Sync Performance](assets/figure.png)
+^ mercury-ocip vs mercury-ocip-fast - This test included retrieving 2000+ users from a Group, and resulted in a 67x speed increase compared to mercury-ocip!
+
+---
+
+This is a backend focused tool, made to be lightweight, fast, and stable as a counterpart to mercury-ocip. Not intended for general scripting and automations.
+
+> [Checkout our automation focused library here!](https://github.com/Fourteen-IP/mercury-ocip)
+
+Testing has shown that the tool can negatively impact BroadWorks infrastructure, as it allows a very high volume of requests to be sent within a short period of time. The extent of the impact will vary from cluster to cluster, depending on hardware specifications, network capacity, and other general factors. Please use this responsibly, high capability requires careful consideration.
 
 ---
 
@@ -42,103 +68,3 @@ All rights reserved.`
 Mercury implements these publicly documented interfaces and does not include any    proprietary Cisco code or intellectual property. All command structures follow the     official OCI-P specification.
 
 ---
-
-## Features
-
-* Interface with Broadworks OCIP via SOAP or TCP
-* Command logic to seamlessly use API
-* Asynchronous version
-* Bulk and automated features (Requested by Broadworks engineers with decades of experience)
- 
-> If you would like to submit a feature request please raise an issue detailing your request.
-
----
-
-## Installation
-
-Install Mercury using pip:
-
-```bash
-pip install mercury-ocip
-```
-
-### Basic Usage
-
-Here's a simple example to get you started:
-
-```python
-from mercury import Client
-
-#SOAP (recommended for most cases):
-client = Client(
-    host="https://your-server.com",  # No /wsdl suffix needed
-    username="your_user",
-    password="your_pass",
-    conn_type="SOAP"
-)
-
-#TCP (for legacy systems or specific requirements):
-client = AsyncClient(
-    host="broadworks.company.com",
-    port=2209,  # Usually 2209/2208 for TCP
-    username="admin",
-    password="password",
-    conn_type="TCP",
-    tls=True  # Set False for unencrypted (not recommended)
-)
-
-# example usage
-response = client.raw_command("SystemSoftwareVersionGetRequest")
-
-print(response)
-# Returns: SystemSoftwareVersionGetResponse(version='24')
-
-print(response.to_dict()) 
-# Returns: {'version': '24'}
-
-print(response.to_json()) 
-# Returns: '{'version': '24'}'
-
-print(response.to_xml()) 
-# Returns: <command ... "SystemSoftwareVersionGetResponse"><version>24</version></command>
-```
-
----
-
-### Agent Usage (In Development)
-
-Here's a simple example to get you started:
-
-```python
-from mercury import Client, Agent
-
-client = Client(
-    host="url",
-    username="username",
-    password="password",
-)
-
-agent = Agent.get_instance(client)
-
-agent.automate.find_alias(
-    "servicePovider",
-    "groupId",
-    alias=0
-) # returns Broadworks enity where alias is assigned.
-
-agent.bulk.create_users_from_csv(
-    path="local/file/path"
-) # Bulk builds all users in predefined bulk sheet
-```
-
----
-
-## Credits
-
-This package builds upon the excellent work of the Broadworks OCI-P Interface package. Special thanks to:
-
-[@nigelm (Nigel Metheringham)](https://github.com/nigelm/) – Developer of the original Python version.
-
-Karol Skibiński – For extensive testing, bug reporting, and valuable contributions.
-
-[@ewurch (Eduardo Würch)](https://github.com/ewurch) – For contributing the R25 schema update and other improvements.

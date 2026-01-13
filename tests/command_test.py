@@ -1,4 +1,4 @@
-from mercury_ocip.commands.base_command import OCIType, ErrorResponse
+from mercury_ocip_fast.commands.base_command import OCIType, ErrorResponse
 from dataclasses import dataclass, field
 from typing import Optional
 import pytest
