@@ -5,11 +5,7 @@
 
 # mercury-ocip-fast
 
-**mercury-ocip-fast** is a lightning fast SDK for interfacing with Broadworks OCIP via TCP.
-
-- [Documentation](https://mercury-fast-docs.14ip.net/)
-
-## Overview
+mercury-ocip-fast is a lightning fast SDK for interfacing with Broadworks OCIP via TCP.
 
 mercury-ocip-fast is a lightning fast and async-first Python SDK for BroadWorks OCI-P. It uses connection pooling and concurrent request batching to handle bulk operations efficiently.
 
