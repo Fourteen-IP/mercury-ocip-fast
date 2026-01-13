@@ -1,4 +1,4 @@
-import attr
+import attrs
 import sys
 import logging
 import hashlib
@@ -35,7 +35,7 @@ class FakeDispatchTable:
         return getattr(commands, command_name, default)
 
 
-@attr.s(slots=True, kw_only=True)
+@attrs.define(kw_only=True)
 class Client:
     """Async client for BroadWorks OCI-P API.
 
@@ -54,18 +54,18 @@ class Client:
         MError: If authentication fails.
     """
 
-    host: str = attr.ib()
-    port: int = attr.ib(default=2209)
-    username: str = attr.ib()
-    password: str = attr.ib()
-    config: PoolConfig = attr.ib(default=PoolConfig())
-    user_agent: str = attr.ib(default="Broadworks SDK")
-    logger: logging.Logger = attr.ib(default=None)
-    session_id: str = attr.ib(default=str(uuid.uuid4()))
-    tls: bool = attr.ib(default=True)
+    host: str
+    port: int = 2209
+    username: str
+    password: str
+    config: PoolConfig = attrs.Factory(PoolConfig)
+    user_agent: str = "Broadworks SDK"
+    session_id: str = attrs.Factory(lambda: str(uuid.uuid4()))
+    tls: bool = True
 
-    _authenticated: bool = attr.ib(default=False)
-    _requester: AsyncTCPRequester = attr.ib(default=None)
+    _authenticated: bool = attrs.field(default=False, init=False)
+    _requester: AsyncTCPRequester = attrs.field(init=False)
+    logger: logging.Logger = attrs.field(init=False)
 
     def __attrs_post_init__(self):
         self.logger = self.logger or self._set_up_logging()

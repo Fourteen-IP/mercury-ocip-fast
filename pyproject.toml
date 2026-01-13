@@ -47,7 +47,6 @@ keywords = [
 ]
 dependencies = [
     "asyncio>=3.4.3",
-    "attr>=0.3.2",
     "attrs>=21.4.0",
     "httpx>=0.28.1",
     "pydantic>=2.11.7",

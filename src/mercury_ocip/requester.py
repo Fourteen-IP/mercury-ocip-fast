@@ -1,4 +1,4 @@
-import attr
+import attrs
 import logging
 import asyncio
 import time
@@ -14,27 +14,27 @@ _BROADSOFT_DOC_END = b"</BroadsoftDocument>"
 _SESSION_ID_TEMPLATE = b'<sessionId xmlns="">%s</sessionId>'
 
 
-@attr.s(slots=True, kw_only=True)
+@attrs.define(kw_only=True)
 class AsyncTCPRequester:
     """A requester for BroadWorks OCI-P.
 
     Args:
-        host (str): The Broadworks Server IP (e.g adp.broadworks.com)
-        port (int): The port of the Broadworks Server, usually 2208 for non tls / 2209 for tls
-        config (PoolConfig): The timeout and general pool settings
-        tls (bool): Whether to use a secure wrapped socket, recommened: True
-        session_id (str): The session_id to send in requests
-        logger (Logger): The logger object to retrieve logs and information.
+        host: The Broadworks Server IP (e.g adp.broadworks.com).
+        port: The port of the Broadworks Server, usually 2208 for non-TLS / 2209 for TLS.
+        config: The timeout and general pool settings.
+        tls: Whether to use a secure wrapped socket.
+        session_id: The session_id to send in requests.
+        logger: The logger object to retrieve logs and information.
     """
 
-    host: str = attr.ib()
-    port: int = attr.ib()
-    config: PoolConfig = attr.ib(default=PoolConfig())
-    tls: bool = attr.ib(default=True)
-    logger: logging.Logger = attr.ib()
-    session_id: str = attr.ib()
-    _pool: TCPConnectionPool | None = attr.ib(default=None)
-    _session_id_bytes: bytes | None = attr.ib(default=None)
+    host: str
+    port: int
+    config: PoolConfig = attrs.Factory(PoolConfig)
+    tls: bool = True
+    logger: logging.Logger
+    session_id: str
+    _pool: TCPConnectionPool | None = attrs.field(default=None, alias="_pool")
+    _session_id_bytes: bytes | None = attrs.field(default=None, alias="_session_id_bytes")
 
     def __attrs_post_init__(self):
         self.logger.info(f"Initializing requester for {self.host}:{self.port} (tls={self.tls})")
