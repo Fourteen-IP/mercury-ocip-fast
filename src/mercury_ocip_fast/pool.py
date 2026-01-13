@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import AsyncIterator
 
-from mercury_ocip.exceptions import (
+from mercury_ocip_fast.exceptions import (
     MErrorSocketInitialisation,
     MErrorSocketTimeout,
 )

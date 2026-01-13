@@ -5,19 +5,19 @@ import hashlib
 import uuid
 from typing import Union, overload
 
-from mercury_ocip.commands.commands import (
+from mercury_ocip_fast.commands.commands import (
     LoginRequest22V5,
     AuthenticationRequest,
     LoginRequest14sp4,
     AuthenticationResponse,
 )
-from mercury_ocip.commands import commands
-from mercury_ocip.commands.base_command import ErrorResponse, SuccessResponse
-from mercury_ocip.requester import AsyncTCPRequester
-from mercury_ocip.pool import PoolConfig
-from mercury_ocip.exceptions import MError
-from mercury_ocip.utils.parser import Parser
-from mercury_ocip.libs.types import (
+from mercury_ocip_fast.commands import commands
+from mercury_ocip_fast.commands.base_command import ErrorResponse, SuccessResponse
+from mercury_ocip_fast.requester import AsyncTCPRequester
+from mercury_ocip_fast.pool import PoolConfig
+from mercury_ocip_fast.exceptions import MError
+from mercury_ocip_fast.utils.parser import Parser
+from mercury_ocip_fast.libs.types import (
     RequestResult,
     CommandInput,
     CommandResult,
@@ -65,10 +65,11 @@ class Client:
 
     _authenticated: bool = attrs.field(default=False, init=False)
     _requester: AsyncTCPRequester = attrs.field(init=False)
-    logger: logging.Logger = attrs.field(init=False)
+    logger: logging.Logger = attrs.Factory(
+        lambda self: self._set_up_logging(), takes_self=True
+    )
 
     def __attrs_post_init__(self):
-        self.logger = self.logger or self._set_up_logging()
         self._requester = AsyncTCPRequester(
             host=self.host,
             port=self.port,
@@ -116,6 +117,17 @@ class Client:
         else:
             response = await self._requester.send_request(command.to_xml())
             return self._receive_response(response)
+
+    async def warm(self, connection_amount: int | None = None) -> int:
+        """Pre-warm the connection pool for faster bulk requests.
+
+        Args:
+            connection_amount: Number of connections to create. Defaults to pool max.
+
+        Returns:
+            Number of connections created.
+        """
+        return await self._requester.warm(connection_amount)
 
     async def authenticate(self) -> CommandResult:
         """Authenticate with the BroadWorks server.
@@ -214,8 +226,11 @@ class Client:
                 else:
                     results.append(batch_results)
             return results
-        else:
+
+        if isinstance(response, str):
             return self._parse_response(response)
+
+        raise MError("Unexpected response type")
 
     def _parse_response(
         self, response: str
@@ -268,6 +283,9 @@ class Client:
 
         if ":" in type_name:
             type_name = type_name.split(":", 1)[1]
+
+        if type_name == "ErrorResponse":
+            return ErrorResponse.from_dict(command_data)
 
         response_class = getattr(commands, type_name, None)
 

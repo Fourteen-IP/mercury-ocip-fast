@@ -5,8 +5,8 @@ import time
 from itertools import batched
 from typing import Union
 
-from mercury_ocip.pool import PoolConfig, TCPConnectionPool
-from mercury_ocip.exceptions import MErrorSocketTimeout, MError
+from mercury_ocip_fast.pool import PoolConfig, TCPConnectionPool
+from mercury_ocip_fast.exceptions import MErrorSocketTimeout, MError
 
 _XML_DECLARATION = b'<?xml version="1.0" encoding="ISO-8859-1"?>'
 _BROADSOFT_DOC_START = b'<BroadsoftDocument protocol="OCI" xmlns="C" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
@@ -34,10 +34,14 @@ class AsyncTCPRequester:
     logger: logging.Logger
     session_id: str
     _pool: TCPConnectionPool | None = attrs.field(default=None, alias="_pool")
-    _session_id_bytes: bytes | None = attrs.field(default=None, alias="_session_id_bytes")
+    _session_id_bytes: bytes | None = attrs.field(
+        default=None, alias="_session_id_bytes"
+    )
 
     def __attrs_post_init__(self):
-        self.logger.info(f"Initializing requester for {self.host}:{self.port} (tls={self.tls})")
+        self.logger.info(
+            f"Initializing requester for {self.host}:{self.port} (tls={self.tls})"
+        )
 
         self._pool = TCPConnectionPool(
             host=self.host,
@@ -119,7 +123,7 @@ class AsyncTCPRequester:
 
         self.logger.info(
             f"Bulk request complete: {len(chunks)} batches in {elapsed:.2f}s "
-            f"({len(commands)/elapsed:.1f} cmd/s)"
+            f"({len(commands) / elapsed:.1f} cmd/s)"
         )
 
         return results

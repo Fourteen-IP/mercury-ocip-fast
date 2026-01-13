@@ -48,8 +48,6 @@ keywords = [
 dependencies = [
     "asyncio>=3.4.3",
     "attrs>=21.4.0",
-    "httpx>=0.28.1",
-    "pydantic>=2.11.7",
     "xmltodict>=1.0.2",
 ]
 
@@ -69,10 +67,6 @@ exclude = ["tests/*", "test_*.py"]
 
 [dependency-groups]
 dev = [
-    "mkdocs>=1.6.1",
-    "mkdocs-material>=9.6.15",
-    "mkdocstrings[python]>=0.29.1",
-    "pymdown-extensions>=10.16",
     "pyrefly>=0.28.1",
     "pytest>=8.3.4",
     "pytest-asyncio>=1.1.0",
