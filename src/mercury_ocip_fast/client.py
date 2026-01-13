@@ -83,6 +83,12 @@ class Client:
         if name == "_dispatch_table":
             return FakeDispatchTable(self)
         raise AttributeError(f"'{type(self).__name__}' has no attribute '{name}'")
+    
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.disconnect()
 
     @overload
     async def command(self, command: CommandInput) -> CommandResult: ...
