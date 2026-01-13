@@ -21,11 +21,19 @@ async with Client(
         password="secret"
     ) as client:
         # single request
-        response = await client.command(UserGetRequest21sp1(user_id="user@example.com"))
+        response = await client.command(
+            UserGetRequest21sp1(
+                    user_id="user@example.com"
+                )
+            )
 
         # bulk requests - batched and processed concurrently
         users = ["user1@example.com", "user2@example.com", "user3@example.com"]
-        responses = await client.command([UserGetRequest21sp1(user_id=u) for u in users])
+        responses = await client.command(
+                [
+                    UserGetRequest21sp1(user_id=u) for u in users
+                ]
+            )
 ```
 
 ---
