@@ -1,5 +1,3 @@
-# Mercury
-
 [![Downloads](https://static.pepy.tech/badge/mercury-ocip)](https://pepy.tech/project/mercury-ocip-fast)
 [![Downloads](https://static.pepy.tech/badge/mercury-ocip/month)](https://pepy.tech/project/mercury-ocip-fast)
 [![Downloads](https://static.pepy.tech/badge/mercury-ocip/week)](https://pepy.tech/project/mercury-ocip-fast)
