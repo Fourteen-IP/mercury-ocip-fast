@@ -17,16 +17,15 @@ __all__ = [
     "ConnectResult",
     "DisconnectResult",
     "XMLDictResult",
-    "OCIResponse",
+    "CommandResponse",
     "CommandInput",
     "CommandResult",
 ]
 
 T = TypeVar("T", bound=OCIDataResponse)
 
-# Generic response type
-type OCIResponse[T] = Union[ErrorResponse, SuccessResponse, T]
+type CommandResponse[T] = Union[ErrorResponse, SuccessResponse, T]
 
 # What client.command() accepts and returns
 type CommandInput = OCICommand
-type CommandResult = Union[OCIResponse, None]
+type CommandResult[T] = Union[CommandResponse[T], None]
