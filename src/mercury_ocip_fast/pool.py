@@ -7,7 +7,7 @@ import ssl
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import AsyncIterator
+from typing import AsyncIterator, Callable, Awaitable
 
 from mercury_ocip_fast.exceptions import (
     MErrorSocketInitialisation,
@@ -118,6 +118,9 @@ class TCPConnectionPool:
     config: PoolConfig = attr.ib(factory=PoolConfig)
     tls: bool = attr.ib(default=True)
     logger: logging.Logger = attr.ib()
+    auth_callback: Callable[[PooledConnection], Awaitable[None]] | None = attr.ib(
+        default=None
+    )
     _pool: asyncio.LifoQueue[PooledConnection] = attr.ib(factory=asyncio.LifoQueue)
     _semaphore: asyncio.Semaphore = attr.ib(default=None)
     _lock: asyncio.Lock = attr.ib(factory=asyncio.Lock)
@@ -203,6 +206,10 @@ class TCPConnectionPool:
                     f"Creating new connection ({len(self._all_connections) + 1}/{self.config.max_connections})"
                 )
                 conn = await self._create_conn()
+
+                if self.auth_callback:
+                    await self.auth_callback(conn)
+
                 conn.in_use = True
                 self._all_connections.append(conn)
                 return conn
@@ -283,7 +290,7 @@ class TCPConnectionPool:
                 await self._close_remove_conn(conn)
 
     @asynccontextmanager
-    async def acquire(self) -> AsyncIterator[PooledConnection]:
+    async def acquire(self, existing_conn=None) -> AsyncIterator[PooledConnection]:
         """Acquire a connection from the pool.
 
         Usage:
@@ -300,6 +307,10 @@ class TCPConnectionPool:
         """
         if self._closed:
             raise RuntimeError("Pool is closed.")
+
+        if existing_conn:
+            yield existing_conn
+            return
 
         async with self._semaphore:
             conn: PooledConnection = await self._get_or_create_conn()
@@ -342,9 +353,18 @@ class TCPConnectionPool:
         async with self._lock:
             for conn in connections:
                 if isinstance(conn, PooledConnection):
-                    self._all_connections.append(conn)
-                    self._pool.put_nowait(conn)
-                    created += 1
+                    try:
+                        if self.auth_callback:
+                            await self.auth_callback(conn)
+                        self._all_connections.append(conn)
+                        self._pool.put_nowait(conn)
+                        created += 1
+                    except Exception as e:
+                        await conn.close()
+                        failed += 1
+                        self.logger.warning(
+                            f"Failed to authenticate connection during warm: {e}"
+                        )
                 else:
                     failed += 1
                     self.logger.warning(
@@ -362,7 +382,6 @@ class TCPConnectionPool:
         """
         self._closed = True
 
-        # Wait for all connections to be returned (with timeout)
         start = time.monotonic()
         in_use_count = sum(1 for conn in self._all_connections if conn.in_use)
 

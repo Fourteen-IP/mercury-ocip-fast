@@ -3,7 +3,7 @@ import sys
 import logging
 import hashlib
 import uuid
-from typing import Union, overload
+from typing import Union, overload, Optional
 
 from mercury_ocip_fast.commands.commands import (
     LoginRequest22V5,
@@ -14,7 +14,7 @@ from mercury_ocip_fast.commands.commands import (
 from mercury_ocip_fast.commands import commands
 from mercury_ocip_fast.commands.base_command import ErrorResponse, SuccessResponse
 from mercury_ocip_fast.requester import AsyncTCPRequester
-from mercury_ocip_fast.pool import PoolConfig
+from mercury_ocip_fast.pool import PoolConfig, PooledConnection
 from mercury_ocip_fast.exceptions import MError
 from mercury_ocip_fast.utils.parser import Parser
 from mercury_ocip_fast.libs.types import (
@@ -77,6 +77,7 @@ class Client:
             tls=self.tls,
             session_id=self.session_id,
             logger=self.logger,
+            auth_callback=self._create_auth_callback(),
         )
 
     def __getattr__(self, name):
@@ -89,6 +90,12 @@ class Client:
 
     async def __aexit__(self, _exc_type, _exc_val, _exc_tb):
         pass
+
+    def _create_auth_callback(self):
+        async def _authenticate(conn: PooledConnection) -> None:
+            await self.authenticate(conn)
+
+        return _authenticate
 
     @overload
     async def command(self, command: CommandInput) -> CommandResult: ...
@@ -135,7 +142,9 @@ class Client:
         """
         return await self._requester.warm(connection_amount)
 
-    async def authenticate(self) -> CommandResult:
+    async def authenticate(
+        self, conn: Optional[PooledConnection] = None
+    ) -> CommandResult:
         """Authenticate with the BroadWorks server.
 
         Uses TLS direct login or two-stage hashed password authentication
@@ -147,7 +156,7 @@ class Client:
         Raises:
             MError: If authentication fails.
         """
-        if self._authenticated:
+        if conn is None and self._authenticated:
             return None
 
         if self.tls:
@@ -156,7 +165,7 @@ class Client:
             )
 
             login_response = self._receive_response(
-                await self._requester.send_request(login_request.to_xml())
+                await self._requester.send_request(login_request.to_xml(), conn=conn)
             )
 
             if isinstance(login_response, ErrorResponse):
@@ -170,7 +179,7 @@ class Client:
             auth_request = AuthenticationRequest(user_id=self.username)
 
             auth_response = self._receive_response(
-                await self._requester.send_request(auth_request.to_xml())
+                await self._requester.send_request(auth_request.to_xml(), conn=conn)
             )
 
             if isinstance(auth_response, ErrorResponse):
@@ -192,7 +201,7 @@ class Client:
             )
 
             login_response = self._receive_response(
-                await self._requester.send_request(login_request.to_xml())
+                await self._requester.send_request(login_request.to_xml(), conn=conn)
             )
 
             if isinstance(login_response, ErrorResponse):

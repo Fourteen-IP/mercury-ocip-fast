@@ -1,11 +1,10 @@
 import attrs
 import logging
 import asyncio
-import time
 from itertools import batched
-from typing import Union
+from typing import Union, Optional, Callable, Awaitable
 
-from mercury_ocip_fast.pool import PoolConfig, TCPConnectionPool
+from mercury_ocip_fast.pool import PoolConfig, TCPConnectionPool, PooledConnection
 from mercury_ocip_fast.exceptions import MErrorSocketTimeout, MError
 
 _XML_DECLARATION = b'<?xml version="1.0" encoding="ISO-8859-1"?>'
@@ -33,6 +32,7 @@ class AsyncTCPRequester:
     tls: bool = True
     logger: logging.Logger
     session_id: str
+    auth_callback: Callable[[PooledConnection], Awaitable[None]] | None = None
     _pool: TCPConnectionPool | None = attrs.field(default=None, alias="_pool")
     _session_id_bytes: bytes | None = attrs.field(
         default=None, alias="_session_id_bytes"
@@ -49,6 +49,7 @@ class AsyncTCPRequester:
             config=self.config,
             tls=self.tls,
             logger=self.logger,
+            auth_callback=self.auth_callback,
         )
 
         self._session_id_bytes: bytes = self.session_id.encode("ISO-8859-1")
@@ -79,7 +80,9 @@ class AsyncTCPRequester:
             except Exception as e:
                 self.logger.warning(f"Error closing connection pool: {e}")
 
-    async def send_request(self, command: str) -> str:
+    async def send_request(
+        self, command: str, conn: Optional[PooledConnection] = None
+    ) -> str:
         """Sends a request to the server.
 
         Args:
@@ -93,7 +96,7 @@ class AsyncTCPRequester:
             MErrorSocketTimeout: If the socket read times out.
         """
         self.logger.debug(f"Sending command to {self.host}")
-        return await self._send_bytes(self._build_oci_xml(command))
+        return await self._send_bytes(self._build_oci_xml(command), conn=conn)
 
     async def send_bulk_request(
         self, commands: list[str], batch_size: int = 15
@@ -125,7 +128,9 @@ class AsyncTCPRequester:
 
         return results
 
-    async def _send_bytes(self, payload: bytes) -> str:
+    async def _send_bytes(
+        self, payload: bytes, conn: Optional[PooledConnection] = None
+    ) -> str:
         """Sends bytes message to Broadworks Server
 
         Args:
@@ -141,7 +146,7 @@ class AsyncTCPRequester:
         if self._pool is None:
             raise MError("Pool failed to initialise")
 
-        async with self._pool.acquire() as conn:
+        async with self._pool.acquire(existing_conn=conn) as conn:
             self.logger.debug(f"Sending {len(payload)} bytes to {self.host}")
 
             try:
