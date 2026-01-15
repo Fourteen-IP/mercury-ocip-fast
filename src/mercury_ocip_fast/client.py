@@ -83,12 +83,12 @@ class Client:
         if name == "_dispatch_table":
             return FakeDispatchTable(self)
         raise AttributeError(f"'{type(self).__name__}' has no attribute '{name}'")
-    
+
     async def __aenter__(self):
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        await self.disconnect()
+    async def __aexit__(self, _exc_type, _exc_val, _exc_tb):
+        pass
 
     @overload
     async def command(self, command: CommandInput) -> CommandResult: ...
@@ -302,17 +302,63 @@ class Client:
 
         return response_class.from_dict(command_data)
 
-    async def disconnect(self) -> None:
-        """Disconnect from the server and close the connection pool."""
+    async def _disconnect(self, wait_timeout: float = 10.0) -> None:
+        """Disconnect from the server and close the connection pool.
+
+        Args:
+            wait_timeout: Maximum seconds to wait for in-flight operations to complete.
+        """
         self._authenticated = False
         self.session_id = ""
-        await self._requester.close()
+        await self._requester.close(wait_timeout=wait_timeout)
+
+    async def shutdown(self, wait_timeout: float = 30.0) -> None:
+        """Gracefully shutdown the client, waiting for all operations to complete.
+
+        Args:
+            wait_timeout: Maximum seconds to wait for in-flight operations to complete.
+        """
+        self.logger.info("Initiating graceful shutdown...")
+        await self._disconnect(wait_timeout=wait_timeout)
+        self.logger.info("Client shutdown complete")
+
+    @property
+    def pool_stats(self) -> dict[str, int]:
+        """Get current connection pool statistics for monitoring.
+
+        Returns:
+            Dictionary containing pool metrics:
+            - total_connections: Total number of connections created
+            - available: Number of connections available in the pool
+            - in_use: Number of connections currently in use
+            - waiting: Number of tasks waiting for a connection
+            - max_connections: Maximum allowed connections
+            - max_concurrent: Maximum concurrent requests allowed
+
+        Usage:
+            stats = client.pool_stats
+            print(f"Pool usage: {stats['in_use']}/{stats['max_connections']}")
+        """
+        if self._requester and self._requester._pool:
+            return self._requester._pool.stats
+        return {
+            "total_connections": 0,
+            "available": 0,
+            "in_use": 0,
+            "waiting": 0,
+            "max_connections": self.config.max_connections,
+            "max_concurrent": self.config.max_concurrent_requests,
+        }
 
     def _set_up_logging(self) -> logging.Logger:
         """Create default logger with WARNING level console output."""
         logger = logging.getLogger(__name__)
         logger.setLevel(logging.WARNING)
-        console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setLevel(logging.WARNING)
-        logger.addHandler(console_handler)
+
+        # Only add handler if none exist to prevent handler accumulation
+        if not logger.hasHandlers():
+            console_handler = logging.StreamHandler(sys.stdout)
+            console_handler.setLevel(logging.WARNING)
+            logger.addHandler(console_handler)
+
         return logger

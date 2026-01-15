@@ -66,11 +66,15 @@ class AsyncTCPRequester:
             return 0
         return await self._pool.warm(count)
 
-    async def close(self) -> None:
-        """Disconnects from the server and closes the pool."""
+    async def close(self, wait_timeout: float = 10.0) -> None:
+        """Disconnects from the server and closes the pool.
+
+        Args:
+            wait_timeout: Maximum seconds to wait for in-flight operations to complete.
+        """
         if self._pool:
             try:
-                await self._pool.close()
+                await self._pool.close(wait_timeout=wait_timeout)
                 self.logger.debug("Connection pool closed")
             except Exception as e:
                 self.logger.warning(f"Error closing connection pool: {e}")
@@ -116,15 +120,8 @@ class AsyncTCPRequester:
             f"(batch_size={batch_size})"
         )
 
-        start = time.monotonic()
         tasks = [self._send_bytes(self._build_oci_xml(chunk)) for chunk in chunks]
         results = await asyncio.gather(*tasks)
-        elapsed = time.monotonic() - start
-
-        self.logger.info(
-            f"Bulk request complete: {len(chunks)} batches in {elapsed:.2f}s "
-            f"({len(commands) / elapsed:.1f} cmd/s)"
-        )
 
         return results
 
@@ -138,7 +135,7 @@ class AsyncTCPRequester:
             response (str): The response from the server
 
         Raises:
-            MError: If the pool fails to init
+            MError: If the pool fails to init or network errors occur
             MErrorSocketTimeout: If the socket read times out.
         """
         if self._pool is None:
@@ -147,8 +144,12 @@ class AsyncTCPRequester:
         async with self._pool.acquire() as conn:
             self.logger.debug(f"Sending {len(payload)} bytes to {self.host}")
 
-            conn.writer.writelines([payload, b"\n"])
-            await conn.writer.drain()
+            try:
+                conn.writer.writelines([payload, b"\n"])
+                await conn.writer.drain()
+            except (ConnectionError, OSError, asyncio.TimeoutError) as e:
+                self.logger.error(f"Failed to send data: {e}")
+                raise MError(f"Network error while sending request: {e}") from e
 
             content = bytearray()
 
@@ -162,7 +163,10 @@ class AsyncTCPRequester:
                     self.logger.error(
                         f"Socket read timed out after {self.config.read_timeout}s: {e}"
                     )
-                    raise MErrorSocketTimeout(str(e))
+                    raise MErrorSocketTimeout(str(e)) from e
+                except (ConnectionError, OSError) as e:
+                    self.logger.error(f"Connection error while reading response: {e}")
+                    raise MError(f"Network error while reading response: {e}") from e
 
                 if not chunk:
                     break
@@ -174,7 +178,11 @@ class AsyncTCPRequester:
 
             self.logger.debug(f"Received {len(content)} bytes from {self.host}")
 
-            return content.rstrip(b"\n").decode("ISO-8859-1")
+            try:
+                return content.rstrip(b"\n").decode("ISO-8859-1")
+            except UnicodeDecodeError as e:
+                self.logger.error(f"Failed to decode response: {e}")
+                raise MError(f"Invalid response encoding: {e}") from e
 
     def _build_oci_xml(self, commands: Union[str, list[str]]) -> bytes:
         """Builds an OCI XML request from the given command(s).

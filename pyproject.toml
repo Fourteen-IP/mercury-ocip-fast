@@ -48,6 +48,7 @@ keywords = [
 dependencies = [
     "asyncio>=3.4.3",
     "attrs>=21.4.0",
+    "rich>=14.2.0",
     "xmltodict>=1.0.2",
 ]
 

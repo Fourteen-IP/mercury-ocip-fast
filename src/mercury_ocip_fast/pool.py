@@ -78,6 +78,23 @@ class PooledConnection:
         """Update last_used timestamp after successful operation."""
         self.last_used = time.monotonic()
 
+    def is_healthy(self) -> bool:
+        """Check if the connection is likely still alive.
+
+        Returns:
+            False if connection is definitely dead, True if it might be alive.
+        """
+        if self.writer.is_closing():
+            return False
+
+        try:
+            if self.reader.at_eof():
+                return False
+        except Exception:
+            return False
+
+        return True
+
     async def close(self) -> None:
         """Gracefully close the underlying TCP connection."""
         try:
@@ -167,8 +184,15 @@ class TCPConnectionPool:
                         await self._close_remove_conn(conn)
                         continue
 
+                    if not conn.is_healthy():
+                        self.logger.debug("Discarding unhealthy connection")
+                        await self._close_remove_conn(conn)
+                        continue
+
                     conn.in_use = True
-                    self.logger.debug(f"Reusing pooled connection (pool size: {self._pool.qsize()})")
+                    self.logger.debug(
+                        f"Reusing pooled connection (pool size: {self._pool.qsize()})"
+                    )
                     return conn
 
                 except asyncio.QueueEmpty:
@@ -176,7 +200,7 @@ class TCPConnectionPool:
 
             if len(self._all_connections) < self.config.max_connections:
                 self.logger.debug(
-                    f"Creating new connection ({len(self._all_connections)+1}/{self.config.max_connections})"
+                    f"Creating new connection ({len(self._all_connections) + 1}/{self.config.max_connections})"
                 )
                 conn = await self._create_conn()
                 conn.in_use = True
@@ -239,18 +263,21 @@ class TCPConnectionPool:
         conn.touch()
 
         async with self._lock:
-            # Give to waiting tasks first (FIFO fairness)
             while self._waiters:
                 waiter = self._waiters.pop(0)
                 if not waiter.done():
-                    self.logger.debug(f"Handing connection to waiter ({len(self._waiters)} still waiting)")
+                    self.logger.debug(
+                        f"Handing connection to waiter ({len(self._waiters)} still waiting)"
+                    )
                     waiter.set_result(conn)
                     return
 
             # No waiters, return to pool
             try:
                 self._pool.put_nowait(conn)
-                self.logger.debug(f"Returned connection to pool (pool size: {self._pool.qsize()})")
+                self.logger.debug(
+                    f"Returned connection to pool (pool size: {self._pool.qsize()})"
+                )
             except asyncio.QueueFull:
                 self.logger.warning("Pool queue full, closing connection")
                 await self._close_remove_conn(conn)
@@ -320,23 +347,45 @@ class TCPConnectionPool:
                     created += 1
                 else:
                     failed += 1
-                    self.logger.warning(f"Failed to create connection during warm: {conn}")
+                    self.logger.warning(
+                        f"Failed to create connection during warm: {conn}"
+                    )
 
         self.logger.info(f"Warmed pool with {created} connections ({failed} failed)")
         return created
 
-    async def close(self) -> None:
-        """Close all connections and shutdown the pool."""
+    async def close(self, wait_timeout: float = 10.0) -> None:
+        """Close all connections and shutdown the pool.
+
+        Args:
+            wait_timeout: Maximum seconds to wait for in-flight operations to complete.
+        """
         self._closed = True
 
+        # Wait for all connections to be returned (with timeout)
+        start = time.monotonic()
+        in_use_count = sum(1 for conn in self._all_connections if conn.in_use)
+
+        if in_use_count > 0:
+            self.logger.info(
+                f"Waiting for {in_use_count} in-use connections to be returned..."
+            )
+
+        while any(conn.in_use for conn in self._all_connections):
+            if time.monotonic() - start > wait_timeout:
+                remaining = sum(1 for conn in self._all_connections if conn.in_use)
+                self.logger.warning(
+                    f"Timeout waiting for connections to be returned ({remaining} still in use)"
+                )
+                break
+            await asyncio.sleep(0.1)
+
         async with self._lock:
-            # Cancel all waiters
             for waiter in self._waiters:
                 if not waiter.done():
                     waiter.cancel()
             self._waiters.clear()
 
-            # Close all connections
             close_tasks = [conn.close() for conn in self._all_connections]
             if close_tasks:
                 await asyncio.gather(*close_tasks, return_exceptions=True)
