@@ -97,8 +97,8 @@ ${response_section}
 ## Example Usage
 
 ```python
-from mercury_ocip.client import Client
-from mercury_ocip.commands import ${class_name}
+from mercury_ocip_fast.client import Client
+from mercury_ocip_fast.commands import ${class_name}
 
 client = Client()
 
@@ -112,7 +112,7 @@ print(response)
 ## Example 2 with Raw Command
 
 ```python
-from mercury_ocip.client import Client
+from mercury_ocip_fast.client import Client
 
 client = Client()
 
@@ -182,7 +182,7 @@ for node in tree.body:
 
                         if resolved in ("SuccessResponse", "ErrorResponse"):
                             response_section += dedent(f"""
-                            ::: mercury_ocip.commands.base_command.{resolved}
+                            ::: mercury_ocip_fast.commands.base_command.{resolved}
                             """)
                         else:
                             response_section += dedent(f"""
@@ -190,9 +190,9 @@ for node in tree.body:
                             """)
                 else:
                     response_section += dedent("""
-                    :: mercury_ocip.commands.base_command.ErrorResponse
+                    :: mercury_ocip_fast.commands.base_command.ErrorResponse
 
-                    :: mercury_ocip.commands.base_command.SuccessResponse
+                    :: mercury_ocip_fast.commands.base_command.SuccessResponse
                             """)  # Fallback to generics - some docs dont specify a response at all!
 
                 content = request_template.substitute(
