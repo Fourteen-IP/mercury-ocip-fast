@@ -140,7 +140,7 @@ class TestAsyncTCPRequester:
         mock_conn.writer = mock_writer
 
         @asynccontextmanager
-        async def mock_acquire():
+        async def mock_acquire(existing_conn=None):
             yield mock_conn
 
         mock_pool.acquire = mock_acquire
@@ -167,7 +167,7 @@ class TestAsyncTCPRequester:
         mock_conn.writer = mock_writer
 
         @asynccontextmanager
-        async def mock_acquire():
+        async def mock_acquire(existing_conn=None):
             yield mock_conn
 
         mock_pool.acquire = mock_acquire
@@ -201,7 +201,7 @@ class TestAsyncTCPRequester:
         mock_conn.writer = mock_writer
 
         @asynccontextmanager
-        async def mock_acquire():
+        async def mock_acquire(existing_conn=None):
             yield mock_conn
 
         mock_pool.acquire = mock_acquire
@@ -234,7 +234,7 @@ class TestAsyncTCPRequester:
         mock_conn.writer = mock_writer
 
         @asynccontextmanager
-        async def mock_acquire():
+        async def mock_acquire(existing_conn=None):
             yield mock_conn
 
         mock_pool.acquire = mock_acquire
@@ -265,7 +265,7 @@ class TestAsyncTCPRequester:
         call_count = 0
 
         @asynccontextmanager
-        async def mock_acquire():
+        async def mock_acquire(existing_conn=None):
             nonlocal call_count
             call_count += 1
             yield mock_conn
@@ -337,7 +337,7 @@ class TestAsyncTCPRequester:
         mock_conn.writer = mock_writer
 
         @asynccontextmanager
-        async def mock_acquire():
+        async def mock_acquire(existing_conn=None):
             yield mock_conn
 
         mock_pool.acquire = mock_acquire
@@ -366,7 +366,7 @@ class TestAsyncTCPRequester:
         mock_conn.writer = mock_writer
 
         @asynccontextmanager
-        async def mock_acquire():
+        async def mock_acquire(existing_conn=None):
             yield mock_conn
 
         mock_pool.acquire = mock_acquire

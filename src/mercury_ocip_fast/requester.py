@@ -1,11 +1,10 @@
 import attrs
 import logging
 import asyncio
-import time
 from itertools import batched
-from typing import Union
+from typing import Union, Optional, Callable, Awaitable
 
-from mercury_ocip_fast.pool import PoolConfig, TCPConnectionPool
+from mercury_ocip_fast.pool import PoolConfig, TCPConnectionPool, PooledConnection
 from mercury_ocip_fast.exceptions import MErrorSocketTimeout, MError
 
 _XML_DECLARATION = b'<?xml version="1.0" encoding="ISO-8859-1"?>'
@@ -33,6 +32,7 @@ class AsyncTCPRequester:
     tls: bool = True
     logger: logging.Logger
     session_id: str
+    auth_callback: Callable[[PooledConnection], Awaitable[None]] | None = None
     _pool: TCPConnectionPool | None = attrs.field(default=None, alias="_pool")
     _session_id_bytes: bytes | None = attrs.field(
         default=None, alias="_session_id_bytes"
@@ -49,6 +49,7 @@ class AsyncTCPRequester:
             config=self.config,
             tls=self.tls,
             logger=self.logger,
+            auth_callback=self.auth_callback,
         )
 
         self._session_id_bytes: bytes = self.session_id.encode("ISO-8859-1")
@@ -66,16 +67,22 @@ class AsyncTCPRequester:
             return 0
         return await self._pool.warm(count)
 
-    async def close(self) -> None:
-        """Disconnects from the server and closes the pool."""
+    async def close(self, wait_timeout: float = 10.0) -> None:
+        """Disconnects from the server and closes the pool.
+
+        Args:
+            wait_timeout: Maximum seconds to wait for in-flight operations to complete.
+        """
         if self._pool:
             try:
-                await self._pool.close()
+                await self._pool.close(wait_timeout=wait_timeout)
                 self.logger.debug("Connection pool closed")
             except Exception as e:
                 self.logger.warning(f"Error closing connection pool: {e}")
 
-    async def send_request(self, command: str) -> str:
+    async def send_request(
+        self, command: str, conn: Optional[PooledConnection] = None
+    ) -> str:
         """Sends a request to the server.
 
         Args:
@@ -89,7 +96,7 @@ class AsyncTCPRequester:
             MErrorSocketTimeout: If the socket read times out.
         """
         self.logger.debug(f"Sending command to {self.host}")
-        return await self._send_bytes(self._build_oci_xml(command))
+        return await self._send_bytes(self._build_oci_xml(command), conn=conn)
 
     async def send_bulk_request(
         self, commands: list[str], batch_size: int = 15
@@ -116,19 +123,14 @@ class AsyncTCPRequester:
             f"(batch_size={batch_size})"
         )
 
-        start = time.monotonic()
         tasks = [self._send_bytes(self._build_oci_xml(chunk)) for chunk in chunks]
         results = await asyncio.gather(*tasks)
-        elapsed = time.monotonic() - start
-
-        self.logger.info(
-            f"Bulk request complete: {len(chunks)} batches in {elapsed:.2f}s "
-            f"({len(commands) / elapsed:.1f} cmd/s)"
-        )
 
         return results
 
-    async def _send_bytes(self, payload: bytes) -> str:
+    async def _send_bytes(
+        self, payload: bytes, conn: Optional[PooledConnection] = None
+    ) -> str:
         """Sends bytes message to Broadworks Server
 
         Args:
@@ -138,17 +140,21 @@ class AsyncTCPRequester:
             response (str): The response from the server
 
         Raises:
-            MError: If the pool fails to init
+            MError: If the pool fails to init or network errors occur
             MErrorSocketTimeout: If the socket read times out.
         """
         if self._pool is None:
             raise MError("Pool failed to initialise")
 
-        async with self._pool.acquire() as conn:
+        async with self._pool.acquire(existing_conn=conn) as conn:
             self.logger.debug(f"Sending {len(payload)} bytes to {self.host}")
 
-            conn.writer.writelines([payload, b"\n"])
-            await conn.writer.drain()
+            try:
+                conn.writer.writelines([payload, b"\n"])
+                await conn.writer.drain()
+            except (ConnectionError, OSError, asyncio.TimeoutError) as e:
+                self.logger.error(f"Failed to send data: {e}")
+                raise MError(f"Network error while sending request: {e}") from e
 
             content = bytearray()
 
@@ -162,7 +168,10 @@ class AsyncTCPRequester:
                     self.logger.error(
                         f"Socket read timed out after {self.config.read_timeout}s: {e}"
                     )
-                    raise MErrorSocketTimeout(str(e))
+                    raise MErrorSocketTimeout(str(e)) from e
+                except (ConnectionError, OSError) as e:
+                    self.logger.error(f"Connection error while reading response: {e}")
+                    raise MError(f"Network error while reading response: {e}") from e
 
                 if not chunk:
                     break
@@ -174,7 +183,11 @@ class AsyncTCPRequester:
 
             self.logger.debug(f"Received {len(content)} bytes from {self.host}")
 
-            return content.rstrip(b"\n").decode("ISO-8859-1")
+            try:
+                return content.rstrip(b"\n").decode("ISO-8859-1")
+            except UnicodeDecodeError as e:
+                self.logger.error(f"Failed to decode response: {e}")
+                raise MError(f"Invalid response encoding: {e}") from e
 
     def _build_oci_xml(self, commands: Union[str, list[str]]) -> bytes:
         """Builds an OCI XML request from the given command(s).

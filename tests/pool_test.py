@@ -227,9 +227,11 @@ class TestTCPConnectionPool:
     async def test_acquire_reuses_pooled_connection(self, pool):
         """Test acquire reuses an existing connection from the pool."""
         mock_reader = AsyncMock()
+        mock_reader.at_eof = Mock(return_value=False)
         mock_writer = AsyncMock()
         mock_writer.close = Mock()
         mock_writer.wait_closed = AsyncMock()
+        mock_writer.is_closing = Mock(return_value=False)
 
         with patch("asyncio.open_connection", return_value=(mock_reader, mock_writer)):
             # First acquire creates a connection

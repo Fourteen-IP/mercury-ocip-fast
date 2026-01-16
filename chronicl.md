@@ -51,6 +51,14 @@
 
 
 ## JOURNAL
+@malkin0xb8 16.01.26
+- Project has been split: the async version is now a separate project called "mercury-ocip-fast"
+- Major architectural changes:
+  - Added connection pool for managing multiple concurrent connections
+  - Removed SOAP support entirely - TCP only
+  - Removed all bulk operation features
+- This is now a stripped down, extremely fast, async-only version focused purely on performance and simplicity
+
 @malkin0xb8 12.12.25
 - Updated Parser to use xmltodict for XML parsing, which simplifies the code and improves reliability. It is very stable and well maintained.
 - Updated some tests to reflect the changes in the Parser.

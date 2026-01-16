@@ -1,9 +1,9 @@
 site_name: Mercury
 site_description: A Python SDK for interacting with BroadWorks OCIP API's (SOAP/TCP).
 
-site_url: "https://mercury-docs.14ip.net/"
-repo_url: "https://github.com/fourteen-ip/mercury-ocip"
-repo_name: "fourteen-ip/mercury-ocip"
+site_url: "https://mercury-fast-docs.14ip.net/"
+repo_url: "https://github.com/fourteen-ip/mercury-ocip-fast"
+repo_name: "fourteen-ip/mercury-ocip-fast"
 dev_addr: 0.0.0.0:8000
 extra_css:
 - styles/extra.css
@@ -45,33 +45,8 @@ theme:
 
 nav:
 - Overview: index.md
-- Client:
-  - Client: client/client.md
-  - Async Client: client/async-client.md
 - Commands Reference: commands/
-- Agent:
-  - Agent: agent/index.md
-  - Bulk Operations:
-    - Create Auto Attendant: agent/bulk-operations/create-auto-attendant.md
-    - Create Call Centers: agent/bulk-operations/create-call-centers.md
-    - Create Call Pickup Groups: agent/bulk-operations/create-call-pickup-groups.md
-    - Create Devices: agent/bulk-operations/create-devices.md
-    - Create Group Admins: agent/bulk-operations/create-group-admins.md
-    - Create Hunt Groups: agent/bulk-operations/create-hunt-groups.md
-    - Create Users: agent/bulk-operations/create-users.md
-    - Modify Call Center Agent List: agent/bulk-operations/modify-call-center-agent-list.md
-    - Modify Group Admin Policy: agent/bulk-operations/modify-group-admin-policy.md
-  - Automations:
-    - Find Alias: agent/automations/find-alias.md
-    - Group Audit: agent/automations/group-audit.md
-    - User Digest: agent/automations/user-digest.md
-- Developer:
-  - Bulk Operations:
-    - Bulk Operations: developer/bulk-operations/index.md
-    - Adding Bulk Operations: developer/bulk-operations/adding-bulk-operations.md
-    - Bulk Operations Reference: developer/bulk-operations/bulk-operations-reference.md
-    - Bulk Operations Overview: developer/bulk-operations/bulk-operations-overview.md
-  - Plugins: developer/plugins/index.md
+- Mercury: https://mercury-docs.14ip.net
 - CLI: https://mercury-cli-docs.14ip.net/
 
 markdown_extensions:

@@ -31,4 +31,4 @@ jobs:
         context: .
         push: true
         tags: |
-          ghcr.io/fourteen-ip/mercury-ocip-docs:latest
+          ghcr.io/fourteen-ip/mercury-ocip-fast-docs:latest

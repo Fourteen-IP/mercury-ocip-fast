@@ -7,7 +7,7 @@ import ssl
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import AsyncIterator
+from typing import AsyncIterator, Callable, Awaitable
 
 from mercury_ocip_fast.exceptions import (
     MErrorSocketInitialisation,
@@ -78,6 +78,23 @@ class PooledConnection:
         """Update last_used timestamp after successful operation."""
         self.last_used = time.monotonic()
 
+    def is_healthy(self) -> bool:
+        """Check if the connection is likely still alive.
+
+        Returns:
+            False if connection is definitely dead, True if it might be alive.
+        """
+        if self.writer.is_closing():
+            return False
+
+        try:
+            if self.reader.at_eof():
+                return False
+        except Exception:
+            return False
+
+        return True
+
     async def close(self) -> None:
         """Gracefully close the underlying TCP connection."""
         try:
@@ -101,6 +118,9 @@ class TCPConnectionPool:
     config: PoolConfig = attr.ib(factory=PoolConfig)
     tls: bool = attr.ib(default=True)
     logger: logging.Logger = attr.ib()
+    auth_callback: Callable[[PooledConnection], Awaitable[None]] | None = attr.ib(
+        default=None
+    )
     _pool: asyncio.LifoQueue[PooledConnection] = attr.ib(factory=asyncio.LifoQueue)
     _semaphore: asyncio.Semaphore = attr.ib(default=None)
     _lock: asyncio.Lock = attr.ib(factory=asyncio.Lock)
@@ -151,6 +171,7 @@ class TCPConnectionPool:
             MErrorSocketTimeout: Timed out waiting for available connection.
         """
         waiter: asyncio.Future[PooledConnection] | None = None
+        conns_to_close: list[PooledConnection] = []
 
         async with self._lock:
             while True:
@@ -159,16 +180,29 @@ class TCPConnectionPool:
 
                     if conn.is_stale(self.config.max_connection_age):
                         self.logger.debug("Discarding stale connection")
-                        await self._close_remove_conn(conn)
+                        self._all_connections.remove(conn)
+                        conns_to_close.append(conn)
                         continue
 
                     if conn.idle_time() > self.config.idle_timeout:
                         self.logger.debug("Discarding idle connection")
-                        await self._close_remove_conn(conn)
+                        self._all_connections.remove(conn)
+                        conns_to_close.append(conn)
+                        continue
+
+                    if not conn.is_healthy():
+                        self.logger.debug("Discarding unhealthy connection")
+                        self._all_connections.remove(conn)
+                        conns_to_close.append(conn)
                         continue
 
                     conn.in_use = True
-                    self.logger.debug(f"Reusing pooled connection (pool size: {self._pool.qsize()})")
+                    self.logger.debug(
+                        f"Reusing pooled connection (pool size: {self._pool.qsize()})"
+                    )
+
+                    if conns_to_close:
+                        asyncio.create_task(self._close_connections(conns_to_close))
                     return conn
 
                 except asyncio.QueueEmpty:
@@ -176,17 +210,27 @@ class TCPConnectionPool:
 
             if len(self._all_connections) < self.config.max_connections:
                 self.logger.debug(
-                    f"Creating new connection ({len(self._all_connections)+1}/{self.config.max_connections})"
+                    f"Creating new connection ({len(self._all_connections) + 1}/{self.config.max_connections})"
                 )
                 conn = await self._create_conn()
+
+                if self.auth_callback:
+                    await self.auth_callback(conn)
+
                 conn.in_use = True
                 self._all_connections.append(conn)
+
+                if conns_to_close:
+                    asyncio.create_task(self._close_connections(conns_to_close))
                 return conn
 
             # Pool exhausted - register as waiter before releasing lock
             self.logger.debug("Pool exhausted, waiting for available connection")
             waiter = asyncio.get_running_loop().create_future()
             self._waiters.append(waiter)
+
+        if conns_to_close:
+            asyncio.create_task(self._close_connections(conns_to_close))
 
         # Wait outside the lock so connections can be returned
         try:
@@ -206,6 +250,14 @@ class TCPConnectionPool:
         """Close and remove a connection from the Pool."""
         await conn.close()
         self._all_connections.remove(conn)
+
+    async def _close_connections(self, conns: list[PooledConnection]) -> None:
+        """Close multiple connections concurrently (fire-and-forget cleanup)."""
+        for conn in conns:
+            try:
+                await conn.close()
+            except Exception:
+                pass  # Connection might already be dead
 
     async def _return_connection(
         self, conn: PooledConnection, healthy: bool = True
@@ -239,24 +291,27 @@ class TCPConnectionPool:
         conn.touch()
 
         async with self._lock:
-            # Give to waiting tasks first (FIFO fairness)
             while self._waiters:
                 waiter = self._waiters.pop(0)
                 if not waiter.done():
-                    self.logger.debug(f"Handing connection to waiter ({len(self._waiters)} still waiting)")
+                    self.logger.debug(
+                        f"Handing connection to waiter ({len(self._waiters)} still waiting)"
+                    )
                     waiter.set_result(conn)
                     return
 
             # No waiters, return to pool
             try:
                 self._pool.put_nowait(conn)
-                self.logger.debug(f"Returned connection to pool (pool size: {self._pool.qsize()})")
+                self.logger.debug(
+                    f"Returned connection to pool (pool size: {self._pool.qsize()})"
+                )
             except asyncio.QueueFull:
                 self.logger.warning("Pool queue full, closing connection")
                 await self._close_remove_conn(conn)
 
     @asynccontextmanager
-    async def acquire(self) -> AsyncIterator[PooledConnection]:
+    async def acquire(self, existing_conn=None) -> AsyncIterator[PooledConnection]:
         """Acquire a connection from the pool.
 
         Usage:
@@ -273,6 +328,10 @@ class TCPConnectionPool:
         """
         if self._closed:
             raise RuntimeError("Pool is closed.")
+
+        if existing_conn:
+            yield existing_conn
+            return
 
         async with self._semaphore:
             conn: PooledConnection = await self._get_or_create_conn()
@@ -315,28 +374,58 @@ class TCPConnectionPool:
         async with self._lock:
             for conn in connections:
                 if isinstance(conn, PooledConnection):
-                    self._all_connections.append(conn)
-                    self._pool.put_nowait(conn)
-                    created += 1
+                    try:
+                        if self.auth_callback:
+                            await self.auth_callback(conn)
+                        self._all_connections.append(conn)
+                        self._pool.put_nowait(conn)
+                        created += 1
+                    except Exception as e:
+                        await conn.close()
+                        failed += 1
+                        self.logger.warning(
+                            f"Failed to authenticate connection during warm: {e}"
+                        )
                 else:
                     failed += 1
-                    self.logger.warning(f"Failed to create connection during warm: {conn}")
+                    self.logger.warning(
+                        f"Failed to create connection during warm: {conn}"
+                    )
 
         self.logger.info(f"Warmed pool with {created} connections ({failed} failed)")
         return created
 
-    async def close(self) -> None:
-        """Close all connections and shutdown the pool."""
+    async def close(self, wait_timeout: float = 10.0) -> None:
+        """Close all connections and shutdown the pool.
+
+        Args:
+            wait_timeout: Maximum seconds to wait for in-flight operations to complete.
+        """
         self._closed = True
 
+        start = time.monotonic()
+        in_use_count = sum(1 for conn in self._all_connections if conn.in_use)
+
+        if in_use_count > 0:
+            self.logger.info(
+                f"Waiting for {in_use_count} in-use connections to be returned..."
+            )
+
+        while any(conn.in_use for conn in self._all_connections):
+            if time.monotonic() - start > wait_timeout:
+                remaining = sum(1 for conn in self._all_connections if conn.in_use)
+                self.logger.warning(
+                    f"Timeout waiting for connections to be returned ({remaining} still in use)"
+                )
+                break
+            await asyncio.sleep(0.1)
+
         async with self._lock:
-            # Cancel all waiters
             for waiter in self._waiters:
                 if not waiter.done():
                     waiter.cancel()
             self._waiters.clear()
 
-            # Close all connections
             close_tasks = [conn.close() for conn in self._all_connections]
             if close_tasks:
                 await asyncio.gather(*close_tasks, return_exceptions=True)

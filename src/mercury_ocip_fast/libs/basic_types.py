@@ -1,5 +1,5 @@
 from typing import Union, Dict, List
-from mercury_ocip.exceptions import MError
+from mercury_ocip_fast.exceptions import MError
 
 # Used for when requester returns a successful/unsuccessful result
 type RequestResult = Union[str, MError]

@@ -1,11 +1,11 @@
 from typing import Union, TypeVar
-from mercury_ocip.commands.base_command import (
+from mercury_ocip_fast.commands.base_command import (
     ErrorResponse,
     SuccessResponse,
     OCIDataResponse,
     OCICommand,
 )
-from mercury_ocip.libs.basic_types import (
+from mercury_ocip_fast.libs.basic_types import (
     RequestResult,
     ConnectResult,
     DisconnectResult,

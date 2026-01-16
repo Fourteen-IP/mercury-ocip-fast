@@ -3,7 +3,7 @@ import sys
 import logging
 import hashlib
 import uuid
-from typing import Union, overload
+from typing import Union, overload, Optional
 
 from mercury_ocip_fast.commands.commands import (
     LoginRequest22V5,
@@ -14,7 +14,7 @@ from mercury_ocip_fast.commands.commands import (
 from mercury_ocip_fast.commands import commands
 from mercury_ocip_fast.commands.base_command import ErrorResponse, SuccessResponse
 from mercury_ocip_fast.requester import AsyncTCPRequester
-from mercury_ocip_fast.pool import PoolConfig
+from mercury_ocip_fast.pool import PoolConfig, PooledConnection
 from mercury_ocip_fast.exceptions import MError
 from mercury_ocip_fast.utils.parser import Parser
 from mercury_ocip_fast.libs.types import (
@@ -77,18 +77,25 @@ class Client:
             tls=self.tls,
             session_id=self.session_id,
             logger=self.logger,
+            auth_callback=self._create_auth_callback(),
         )
 
     def __getattr__(self, name):
         if name == "_dispatch_table":
             return FakeDispatchTable(self)
         raise AttributeError(f"'{type(self).__name__}' has no attribute '{name}'")
-    
+
     async def __aenter__(self):
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        await self.disconnect()
+    async def __aexit__(self, _exc_type, _exc_val, _exc_tb):
+        await self._disconnect()
+
+    def _create_auth_callback(self):
+        async def _authenticate(conn: PooledConnection) -> None:
+            await self.authenticate(conn)
+
+        return _authenticate
 
     @overload
     async def command(self, command: CommandInput) -> CommandResult: ...
@@ -135,7 +142,9 @@ class Client:
         """
         return await self._requester.warm(connection_amount)
 
-    async def authenticate(self) -> CommandResult:
+    async def authenticate(
+        self, conn: Optional[PooledConnection] = None
+    ) -> CommandResult:
         """Authenticate with the BroadWorks server.
 
         Uses TLS direct login or two-stage hashed password authentication
@@ -147,7 +156,7 @@ class Client:
         Raises:
             MError: If authentication fails.
         """
-        if self._authenticated:
+        if conn is None and self._authenticated:
             return None
 
         if self.tls:
@@ -156,7 +165,7 @@ class Client:
             )
 
             login_response = self._receive_response(
-                await self._requester.send_request(login_request.to_xml())
+                await self._requester.send_request(login_request.to_xml(), conn=conn)
             )
 
             if isinstance(login_response, ErrorResponse):
@@ -170,7 +179,7 @@ class Client:
             auth_request = AuthenticationRequest(user_id=self.username)
 
             auth_response = self._receive_response(
-                await self._requester.send_request(auth_request.to_xml())
+                await self._requester.send_request(auth_request.to_xml(), conn=conn)
             )
 
             if isinstance(auth_response, ErrorResponse):
@@ -192,7 +201,7 @@ class Client:
             )
 
             login_response = self._receive_response(
-                await self._requester.send_request(login_request.to_xml())
+                await self._requester.send_request(login_request.to_xml(), conn=conn)
             )
 
             if isinstance(login_response, ErrorResponse):
@@ -302,17 +311,63 @@ class Client:
 
         return response_class.from_dict(command_data)
 
-    async def disconnect(self) -> None:
-        """Disconnect from the server and close the connection pool."""
+    async def _disconnect(self, wait_timeout: float = 10.0) -> None:
+        """Disconnect from the server and close the connection pool.
+
+        Args:
+            wait_timeout: Maximum seconds to wait for in-flight operations to complete.
+        """
         self._authenticated = False
         self.session_id = ""
-        await self._requester.close()
+        await self._requester.close(wait_timeout=wait_timeout)
+
+    async def shutdown(self, wait_timeout: float = 30.0) -> None:
+        """Gracefully shutdown the client, waiting for all operations to complete.
+
+        Args:
+            wait_timeout: Maximum seconds to wait for in-flight operations to complete.
+        """
+        self.logger.info("Initiating graceful shutdown...")
+        await self._disconnect(wait_timeout=wait_timeout)
+        self.logger.info("Client shutdown complete")
+
+    @property
+    def pool_stats(self) -> dict[str, int]:
+        """Get current connection pool statistics for monitoring.
+
+        Returns:
+            Dictionary containing pool metrics:
+            - total_connections: Total number of connections created
+            - available: Number of connections available in the pool
+            - in_use: Number of connections currently in use
+            - waiting: Number of tasks waiting for a connection
+            - max_connections: Maximum allowed connections
+            - max_concurrent: Maximum concurrent requests allowed
+
+        Usage:
+            stats = client.pool_stats
+            print(f"Pool usage: {stats['in_use']}/{stats['max_connections']}")
+        """
+        if self._requester and self._requester._pool:
+            return self._requester._pool.stats
+        return {
+            "total_connections": 0,
+            "available": 0,
+            "in_use": 0,
+            "waiting": 0,
+            "max_connections": self.config.max_connections,
+            "max_concurrent": self.config.max_concurrent_requests,
+        }
 
     def _set_up_logging(self) -> logging.Logger:
         """Create default logger with WARNING level console output."""
         logger = logging.getLogger(__name__)
         logger.setLevel(logging.WARNING)
-        console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setLevel(logging.WARNING)
-        logger.addHandler(console_handler)
+
+        # Only add handler if none exist to prevent handler accumulation
+        if not logger.hasHandlers():
+            console_handler = logging.StreamHandler(sys.stdout)
+            console_handler.setLevel(logging.WARNING)
+            logger.addHandler(console_handler)
+
         return logger
