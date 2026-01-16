@@ -15,7 +15,7 @@ from typing import (
     runtime_checkable,
 )
 
-from mercury_ocip.utils.defines import snake_to_camel, to_snake_case
+from mercury_ocip_fast.utils.defines import snake_to_camel, to_snake_case
 
 OCIType = TypeVar("OCIType")
 T = TypeVar("T")
