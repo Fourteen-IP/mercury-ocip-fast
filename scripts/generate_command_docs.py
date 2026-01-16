@@ -128,7 +128,7 @@ defined_class_names = {
     node.name for node in tree.body if isinstance(node, ast.ClassDef)
 }
 
-for node in tree.body[:50]:
+for node in tree.body:
     if isinstance(node, ast.ClassDef):
         class_name = node.name
         class_inheritance = node.bases[0].id if node.bases else ""  # type: ignore
