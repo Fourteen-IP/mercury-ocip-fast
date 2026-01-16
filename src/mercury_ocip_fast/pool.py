@@ -171,6 +171,7 @@ class TCPConnectionPool:
             MErrorSocketTimeout: Timed out waiting for available connection.
         """
         waiter: asyncio.Future[PooledConnection] | None = None
+        conns_to_close: list[PooledConnection] = []
 
         async with self._lock:
             while True:
@@ -179,23 +180,29 @@ class TCPConnectionPool:
 
                     if conn.is_stale(self.config.max_connection_age):
                         self.logger.debug("Discarding stale connection")
-                        await self._close_remove_conn(conn)
+                        self._all_connections.remove(conn)
+                        conns_to_close.append(conn)
                         continue
 
                     if conn.idle_time() > self.config.idle_timeout:
                         self.logger.debug("Discarding idle connection")
-                        await self._close_remove_conn(conn)
+                        self._all_connections.remove(conn)
+                        conns_to_close.append(conn)
                         continue
 
                     if not conn.is_healthy():
                         self.logger.debug("Discarding unhealthy connection")
-                        await self._close_remove_conn(conn)
+                        self._all_connections.remove(conn)
+                        conns_to_close.append(conn)
                         continue
 
                     conn.in_use = True
                     self.logger.debug(
                         f"Reusing pooled connection (pool size: {self._pool.qsize()})"
                     )
+
+                    if conns_to_close:
+                        asyncio.create_task(self._close_connections(conns_to_close))
                     return conn
 
                 except asyncio.QueueEmpty:
@@ -212,12 +219,18 @@ class TCPConnectionPool:
 
                 conn.in_use = True
                 self._all_connections.append(conn)
+
+                if conns_to_close:
+                    asyncio.create_task(self._close_connections(conns_to_close))
                 return conn
 
             # Pool exhausted - register as waiter before releasing lock
             self.logger.debug("Pool exhausted, waiting for available connection")
             waiter = asyncio.get_running_loop().create_future()
             self._waiters.append(waiter)
+
+        if conns_to_close:
+            asyncio.create_task(self._close_connections(conns_to_close))
 
         # Wait outside the lock so connections can be returned
         try:
@@ -237,6 +250,14 @@ class TCPConnectionPool:
         """Close and remove a connection from the Pool."""
         await conn.close()
         self._all_connections.remove(conn)
+
+    async def _close_connections(self, conns: list[PooledConnection]) -> None:
+        """Close multiple connections concurrently (fire-and-forget cleanup)."""
+        for conn in conns:
+            try:
+                await conn.close()
+            except Exception:
+                pass  # Connection might already be dead
 
     async def _return_connection(
         self, conn: PooledConnection, healthy: bool = True

@@ -89,7 +89,7 @@ class Client:
         return self
 
     async def __aexit__(self, _exc_type, _exc_val, _exc_tb):
-        pass
+        await self._disconnect()
 
     def _create_auth_callback(self):
         async def _authenticate(conn: PooledConnection) -> None:

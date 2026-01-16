@@ -29,7 +29,8 @@ async with Client(
         users = ["user1@example.com", "user2@example.com", "user3@example.com"]
         responses = await client.command(
                 [
-                    UserGetRequest21sp1(user_id=u) for u in users
+                    UserGetRequest21sp1(user_id=u)
+                    for u in users
                 ]
             )
 ```
