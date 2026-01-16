@@ -235,7 +235,7 @@ class Parser:
             and "colHeading" in value
             and "row" in value
         ):
-            from mercury_ocip.commands.base_command import OCITable, OCITableRow
+            from mercury_ocip_fast.commands.base_command import OCITable, OCITableRow
 
             col_headings = value["colHeading"]
             if not isinstance(col_headings, list):
