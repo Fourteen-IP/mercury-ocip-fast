@@ -230,7 +230,7 @@ class TestClient:
 
         call_count = 0
 
-        async def mock_send(_cmd):
+        async def mock_send(_cmd, conn=None):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
@@ -273,7 +273,7 @@ class TestClient:
         # First call is login, second is command
         call_count = 0
 
-        async def mock_send(_cmd):
+        async def mock_send(_cmd, conn=None):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
@@ -383,11 +383,11 @@ class TestClient:
 
     @pytest.mark.asyncio
     async def test_disconnect(self, client, mock_requester):
-        """Test disconnect() resets state and closes requester."""
+        """Test _disconnect() resets state and closes requester."""
         object.__setattr__(client, "_authenticated", True)
-        client.session_id = "test-session"
+        object.__setattr__(client, "session_id", "test-session")
 
-        await client.disconnect()
+        await client._disconnect()
 
         assert client._authenticated is False
         assert client.session_id == ""
@@ -558,7 +558,7 @@ class TestClientIntegration:
 
         call_count = 0
 
-        async def mock_send(_cmd):
+        async def mock_send(_cmd, conn=None):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
