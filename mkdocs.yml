@@ -4,7 +4,7 @@ site_description: A Python SDK for interacting with BroadWorks OCIP API's (SOAP/
 site_url: "https://mercury-fast-docs.14ip.net/"
 repo_url: "https://github.com/fourteen-ip/mercury-ocip-fast"
 repo_name: "fourteen-ip/mercury-ocip-fast"
-dev_addr: 0.0.0.0:8000
+dev_addr: 0.0.0.0:8080
 extra_css:
 - styles/extra.css
 
