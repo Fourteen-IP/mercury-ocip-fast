@@ -1,8 +1,8 @@
-from typing import Any
-from typing import get_type_hints, Optional
-from dataclasses import fields, is_dataclass, dataclass
-from mercury_ocip_fast.utils.parser import Parser
+from dataclasses import dataclass, fields, is_dataclass
+from typing import Any, Optional, TypeVar, get_type_hints
+
 from mercury_ocip_fast.utils.defines import to_snake_case
+from mercury_ocip_fast.utils.parser import Parser
 
 
 class OCIType:
@@ -58,6 +58,15 @@ class OCIType:
 class OCICommand(OCIType):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+
+
+T = TypeVar("T")
+type Nillable[T] = T
+
+
+@dataclass
+class OCINil:
+    pass
 
 
 class OCIRequest(OCICommand):
