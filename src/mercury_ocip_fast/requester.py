@@ -148,6 +148,7 @@ class AsyncTCPRequester:
 
         async with self._pool.acquire(existing_conn=conn) as conn:
             self.logger.debug(f"Sending {len(payload)} bytes to {self.host}")
+            self.logger.debug(f">>> OUTGOING REQUEST:\n{payload.decode('ISO-8859-1')}")
 
             try:
                 conn.writer.writelines([payload, b"\n"])
@@ -184,7 +185,9 @@ class AsyncTCPRequester:
             self.logger.debug(f"Received {len(content)} bytes from {self.host}")
 
             try:
-                return content.rstrip(b"\n").decode("ISO-8859-1")
+                decoded = content.rstrip(b"\n").decode("ISO-8859-1")
+                self.logger.debug(f"<<< INCOMING RESPONSE:\n{decoded}")
+                return decoded
             except UnicodeDecodeError as e:
                 self.logger.error(f"Failed to decode response: {e}")
                 raise MError(f"Invalid response encoding: {e}") from e

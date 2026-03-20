@@ -124,10 +124,15 @@ class Client:
             await self.authenticate()
 
         if isinstance(command, list):
+            self.logger.debug(
+                f"Dispatching {len(command)} commands: "
+                f"{[type(cmd).__name__ for cmd in command]}"
+            )
             xml_commands = [cmd.to_xml() for cmd in command]
             responses = await self._requester.send_bulk_request(xml_commands)
             return self._receive_response(responses)
         else:
+            self.logger.debug(f"Dispatching command: {type(command).__name__}")
             response = await self._requester.send_request(command.to_xml())
             return self._receive_response(response)
 
@@ -160,6 +165,7 @@ class Client:
             return None
 
         if self.tls:
+            self.logger.debug(f"Authenticating {self.username!r} via TLS (LoginRequest22V5)")
             login_request = LoginRequest22V5(
                 user_id=self.username, password=self.password
             )
@@ -169,6 +175,7 @@ class Client:
             )
 
             if isinstance(login_response, ErrorResponse):
+                self.logger.error(f"TLS authentication failed for {self.username!r}: {login_response.summary}")
                 raise MError(f"Failed to authenticate: {login_response.summary}")
 
             self.logger.info(f"{self.username} Authenticated with server")
@@ -176,6 +183,7 @@ class Client:
             return login_response
         else:
             # Non-TLS requires two-stage authentication with password hashing
+            self.logger.debug(f"Authenticating {self.username!r} via non-TLS (two-stage)")
             auth_request = AuthenticationRequest(user_id=self.username)
 
             auth_response = self._receive_response(
@@ -183,11 +191,13 @@ class Client:
             )
 
             if isinstance(auth_response, ErrorResponse):
+                self.logger.error(f"AuthenticationRequest failed for {self.username!r}: {auth_response.summary}")
                 raise MError(f"Auth request failed: {auth_response.summary}")
 
             if not isinstance(auth_response, AuthenticationResponse):
                 raise MError("Unexpected response type from AuthenticationRequest")
 
+            self.logger.debug(f"Received nonce, signing password for {self.username!r}")
             authhash: str = hashlib.sha1(self.password.encode()).hexdigest().lower()
             signed_password: str = (
                 hashlib.md5(f"{auth_response.nonce}:{authhash}".encode())
@@ -196,6 +206,7 @@ class Client:
             )
 
             # Complete login with signed password
+            self.logger.debug(f"Sending LoginRequest14sp4 for {self.username!r}")
             login_request = LoginRequest14sp4(
                 user_id=self.username, signed_password=signed_password
             )
@@ -205,6 +216,7 @@ class Client:
             )
 
             if isinstance(login_response, ErrorResponse):
+                self.logger.error(f"Login failed for {self.username!r}: {login_response.summary}")
                 raise MError(f"Failed to authenticate: {login_response.summary}")
 
             self.logger.info("Authenticated with server")
@@ -299,9 +311,14 @@ class Client:
         if ":" in type_name:
             type_name = type_name.split(":", 1)[1]
 
+        self.logger.debug(f"Parsing response type: {type_name}")
+
         if type_name == "ErrorResponse":
-            return ErrorResponse.from_dict(command_data)
+            result = ErrorResponse.from_dict(command_data)
+            self.logger.debug(f"ErrorResponse received: {result.summary!r}")
+            return result
         elif type_name == "SuccessResponse":
+            self.logger.debug("SuccessResponse received")
             return SuccessResponse.from_dict(command_data)
 
         response_class = getattr(commands, type_name, None)
@@ -309,6 +326,7 @@ class Client:
         if not response_class:
             raise MError(f"Failed To Find Raw Response Type: {type_name}")
 
+        self.logger.debug(f"Resolved response class: {response_class.__name__}")
         return response_class.from_dict(command_data)
 
     async def _disconnect(self, wait_timeout: float = 10.0) -> None:
