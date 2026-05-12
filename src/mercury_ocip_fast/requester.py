@@ -91,7 +91,7 @@ class AsyncTCPRequester:
             MErrorSocketTimeout: If the socket read times out.
         """
         self.logger.debug(f"Sending command to {self.host}")
-        return await self._send_bytes(command, conn=conn)
+        return await self._send_commands(command, conn=conn)
 
     async def send_bulk_request(
         self, commands: list[str], batch_size: int = 15
@@ -118,12 +118,12 @@ class AsyncTCPRequester:
             f"(batch_size={batch_size})"
         )
 
-        tasks = [self._send_bytes(chunk) for chunk in chunks]
+        tasks = [self._send_commands(chunk) for chunk in chunks]
         results = await asyncio.gather(*tasks)
 
         return results
 
-    async def _send_bytes(
+    async def _send_commands(
         self, commands: Union[str, list[str]], conn: Optional[PooledConnection] = None
     ) -> str:
         """Sends a command (or list of commands) to the BroadWorks server.

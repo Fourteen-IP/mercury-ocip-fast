@@ -318,8 +318,8 @@ class TestAsyncTCPRequester:
         mock_logger.warning.assert_called()
 
     @pytest.mark.asyncio
-    async def test_send_bytes_reads_until_document_end(self, requester_with_mock_pool, mock_pool):
-        """Test _send_bytes reads chunks until </BroadsoftDocument> is found."""
+    async def test_send_commands_reads_until_document_end(self, requester_with_mock_pool, mock_pool):
+        """Test _send_commands reads chunks until </BroadsoftDocument> is found."""
         mock_reader = AsyncMock()
         mock_writer = AsyncMock()
         mock_writer.writelines = Mock()
@@ -347,15 +347,15 @@ class TestAsyncTCPRequester:
 
         mock_pool.acquire = mock_acquire
 
-        result = await requester_with_mock_pool._send_bytes("<test/>")
+        result = await requester_with_mock_pool._send_commands("<test/>")
 
         assert "BroadsoftDocument" in result
         assert "sessionId" in result
         assert result.endswith("</BroadsoftDocument>")
 
     @pytest.mark.asyncio
-    async def test_send_bytes_handles_empty_chunks(self, requester_with_mock_pool, mock_pool):
-        """Test _send_bytes stops on empty chunk (connection closed)."""
+    async def test_send_commands_handles_empty_chunks(self, requester_with_mock_pool, mock_pool):
+        """Test _send_commands stops on empty chunk (connection closed)."""
         mock_reader = AsyncMock()
         mock_writer = AsyncMock()
         mock_writer.writelines = Mock()
@@ -377,7 +377,7 @@ class TestAsyncTCPRequester:
 
         mock_pool.acquire = mock_acquire
 
-        result = await requester_with_mock_pool._send_bytes("<test/>")
+        result = await requester_with_mock_pool._send_commands("<test/>")
 
         assert result == "<partial>data"
 
