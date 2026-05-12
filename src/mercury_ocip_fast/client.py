@@ -319,7 +319,7 @@ class Client:
         self.logger.debug(f"Parsing response type: {type_name}")
 
         if type_name == "ErrorResponse":
-            result = ErrorResponse.from_dict(command_data)
+            result: ErrorResponse = ErrorResponse.from_dict(command_data)  # type: ignore[assignment]
             self.logger.debug(f"ErrorResponse received: {result.summary!r}")
             return result
         elif type_name == "SuccessResponse":
