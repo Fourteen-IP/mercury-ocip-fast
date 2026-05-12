@@ -186,6 +186,42 @@ class TestTCPConnectionPool:
             assert isinstance(conn, PooledConnection)
             assert conn.reader == mock_reader
             assert conn.writer == mock_writer
+            assert len(conn.session_id) > 0
+
+    @pytest.mark.asyncio
+    async def test_each_connection_gets_unique_session_id(self, pool):
+        """Test each pooled connection is assigned its own unique session ID."""
+        mock_reader = AsyncMock()
+        mock_writer = AsyncMock()
+        mock_writer.close = Mock()
+        mock_writer.wait_closed = AsyncMock()
+
+        with patch("asyncio.open_connection", return_value=(mock_reader, mock_writer)):
+            conn_a = await pool._create_conn()
+            conn_b = await pool._create_conn()
+
+        assert conn_a.session_id != conn_b.session_id
+
+    @pytest.mark.asyncio
+    async def test_auth_failure_closes_tcp_connection(self, pool):
+        """Test auth failure closes the TCP connection rather than leaking it."""
+        mock_reader = AsyncMock()
+        mock_writer = AsyncMock()
+        mock_writer.close = Mock()
+        mock_writer.wait_closed = AsyncMock()
+
+        async def failing_auth(conn):
+            raise Exception("BW rate-limit: invalid credentials")
+
+        pool.auth_callback = failing_auth
+
+        with patch("asyncio.open_connection", return_value=(mock_reader, mock_writer)):
+            with pytest.raises(Exception, match="BW rate-limit"):
+                async with pool.acquire():
+                    pass
+
+        mock_writer.close.assert_called_once()
+        assert len(pool._all_connections) == 0
 
     @pytest.mark.asyncio
     async def test_create_conn_timeout_raises_error(self, pool):
