@@ -34,9 +34,6 @@ class AsyncTCPRequester:
     session_id: str
     auth_callback: Callable[[PooledConnection], Awaitable[None]] | None = None
     _pool: TCPConnectionPool | None = attrs.field(default=None, alias="_pool")
-    _session_id_bytes: bytes | None = attrs.field(
-        default=None, alias="_session_id_bytes"
-    )
 
     def __attrs_post_init__(self):
         self.logger.info(
@@ -51,8 +48,6 @@ class AsyncTCPRequester:
             logger=self.logger,
             auth_callback=self.auth_callback,
         )
-
-        self._session_id_bytes: bytes = self.session_id.encode("ISO-8859-1")
 
     async def warm(self, count: int | None = None) -> int:
         """Pre-warm the connection pool for faster bulk requests.
@@ -96,7 +91,7 @@ class AsyncTCPRequester:
             MErrorSocketTimeout: If the socket read times out.
         """
         self.logger.debug(f"Sending command to {self.host}")
-        return await self._send_bytes(self._build_oci_xml(command), conn=conn)
+        return await self._send_commands(command, conn=conn)
 
     async def send_bulk_request(
         self, commands: list[str], batch_size: int = 15
@@ -123,18 +118,22 @@ class AsyncTCPRequester:
             f"(batch_size={batch_size})"
         )
 
-        tasks = [self._send_bytes(self._build_oci_xml(chunk)) for chunk in chunks]
+        tasks = [self._send_commands(chunk) for chunk in chunks]
         results = await asyncio.gather(*tasks)
 
         return results
 
-    async def _send_bytes(
-        self, payload: bytes, conn: Optional[PooledConnection] = None
+    async def _send_commands(
+        self, commands: Union[str, list[str]], conn: Optional[PooledConnection] = None
     ) -> str:
-        """Sends bytes message to Broadworks Server
+        """Sends a command (or list of commands) to the BroadWorks server.
+
+        Acquires a connection, builds the OCI XML using that connection's unique
+        session ID, writes the payload, and reads until the closing document tag.
 
         Args:
-            payload (bytes): The message/commands to send to the server encoded as ISO-8859-1
+            commands: A single XML command string or list of command strings.
+            conn: Optional existing connection to reuse (e.g. during auth).
 
         Returns:
             response (str): The response from the server
@@ -147,7 +146,8 @@ class AsyncTCPRequester:
             raise MError("Pool failed to initialise")
 
         async with self._pool.acquire(existing_conn=conn) as conn:
-            self.logger.debug(f"Sending {len(payload)} bytes to {self.host}")
+            payload = self._build_oci_xml(commands, conn.session_id.encode("ISO-8859-1"))
+            self.logger.debug(f"Sending {len(payload)} bytes to {self.host} (session={conn.session_id})")
             self.logger.debug(f">>> OUTGOING REQUEST:\n{payload.decode('ISO-8859-1')}")
 
             try:
@@ -192,7 +192,7 @@ class AsyncTCPRequester:
                 self.logger.error(f"Failed to decode response: {e}")
                 raise MError(f"Invalid response encoding: {e}") from e
 
-    def _build_oci_xml(self, commands: Union[str, list[str]]) -> bytes:
+    def _build_oci_xml(self, commands: Union[str, list[str]], session_id_bytes: bytes) -> bytes:
         """Builds an OCI XML request from the given command(s).
 
         Constructs an XML document with a session ID and the encoded command(s),
@@ -200,6 +200,7 @@ class AsyncTCPRequester:
 
         Args:
             commands (str | list[str]): A single command string or list of command strings.
+            session_id_bytes: The session ID for this connection, encoded as ISO-8859-1.
 
         Returns:
             The serialized XML document as bytes, encoded with ISO-8859-1.
@@ -213,7 +214,7 @@ class AsyncTCPRequester:
             [
                 _XML_DECLARATION,
                 _BROADSOFT_DOC_START,
-                _SESSION_ID_TEMPLATE % self._session_id_bytes,
+                _SESSION_ID_TEMPLATE % session_id_bytes,
                 commands_payload,
                 _BROADSOFT_DOC_END,
             ]

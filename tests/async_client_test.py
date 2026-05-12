@@ -583,3 +583,65 @@ class TestClientIntegration:
         assert client._authenticated is True
         # First call is login, second is command
         assert call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_concurrent_commands_authenticate_only_once(self, mock_logger):
+        """Two concurrent command() calls must trigger authenticate() exactly once."""
+        import asyncio
+
+        mock_req = Mock(spec=AsyncTCPRequester)
+
+        auth_started = asyncio.Event()
+        auth_proceed = asyncio.Event()
+
+        login_response_xml = '''<?xml version="1.0"?>
+<BroadsoftDocument xmlns="C" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+<command xsi:type="c:LoginResponse22V5">
+<loginType>System</loginType>
+<locale>en_US</locale>
+<encoding>ISO-8859-1</encoding>
+<isEnterprise>false</isEnterprise>
+<userDomain>example.com</userDomain>
+</command>
+</BroadsoftDocument>'''
+
+        success_xml = '''<?xml version="1.0"?>
+<BroadsoftDocument xmlns="C" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+</BroadsoftDocument>'''
+
+        login_call_count = 0
+
+        async def mock_send(cmd, conn=None):
+            nonlocal login_call_count
+            if "LoginRequest22V5" in cmd:
+                login_call_count += 1
+                auth_started.set()
+                await auth_proceed.wait()
+                return login_response_xml
+            return success_xml
+
+        mock_req.send_request = AsyncMock(side_effect=mock_send)
+
+        with patch.object(AsyncTCPRequester, "__attrs_post_init__"):
+            client = Client(
+                host="test.example.com",
+                username="admin",
+                password="password",
+                logger=mock_logger,
+            )
+            object.__setattr__(client, "_requester", mock_req)
+
+        mock_cmd = MockCommand()
+
+        # Launch two concurrent command() calls
+        task1 = asyncio.create_task(client.command(mock_cmd))
+        task2 = asyncio.create_task(client.command(mock_cmd))
+
+        # Wait for the first authenticate() to begin, then unblock it
+        await auth_started.wait()
+        auth_proceed.set()
+
+        await asyncio.gather(task1, task2)
+
+        assert client._authenticated is True
+        assert login_call_count == 1, f"Expected 1 login call, got {login_call_count}"

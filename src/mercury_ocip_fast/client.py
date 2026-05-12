@@ -1,3 +1,4 @@
+import asyncio
 import attrs
 import sys
 import logging
@@ -64,12 +65,14 @@ class Client:
     tls: bool = True
 
     _authenticated: bool = attrs.field(default=False, init=False)
+    _auth_lock: asyncio.Lock = attrs.field(init=False)
     _requester: AsyncTCPRequester = attrs.field(init=False)
     logger: logging.Logger = attrs.Factory(
         lambda self: self._set_up_logging(), takes_self=True
     )
 
     def __attrs_post_init__(self):
+        self._auth_lock = asyncio.Lock()
         self._requester = AsyncTCPRequester(
             host=self.host,
             port=self.port,
@@ -121,7 +124,9 @@ class Client:
             MError: If a command fails or response cannot be parsed.
         """
         if not self._authenticated:
-            await self.authenticate()
+            async with self._auth_lock:
+                if not self._authenticated:
+                    await self.authenticate()
 
         if isinstance(command, list):
             self.logger.debug(
@@ -314,7 +319,7 @@ class Client:
         self.logger.debug(f"Parsing response type: {type_name}")
 
         if type_name == "ErrorResponse":
-            result = ErrorResponse.from_dict(command_data)
+            result: ErrorResponse = ErrorResponse.from_dict(command_data)  # type: ignore[assignment]
             self.logger.debug(f"ErrorResponse received: {result.summary!r}")
             return result
         elif type_name == "SuccessResponse":

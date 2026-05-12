@@ -5,6 +5,7 @@ import attr
 import logging
 import ssl
 import time
+import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import AsyncIterator, Callable, Awaitable
@@ -47,6 +48,7 @@ class PooledConnection:
     Attributes:
         reader: asyncio StreamReader for receiving data.
         writer: asyncio StreamWriter for sending data.
+        session_id: Unique OCI-P session identifier for this connection.
         created_at: Timestamp when connection was established.
         last_used: Timestamp of last successful operation.
         in_use: Whether this connection is currently checked out.
@@ -54,6 +56,7 @@ class PooledConnection:
 
     reader: asyncio.StreamReader
     writer: asyncio.StreamWriter
+    session_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     created_at: float = field(default_factory=time.monotonic)
     last_used: float = field(default_factory=time.monotonic)
     in_use: bool = False
@@ -215,7 +218,11 @@ class TCPConnectionPool:
                 conn = await self._create_conn()
 
                 if self.auth_callback:
-                    await self.auth_callback(conn)
+                    try:
+                        await self.auth_callback(conn)
+                    except Exception:
+                        await conn.close()
+                        raise
 
                 conn.in_use = True
                 self._all_connections.append(conn)

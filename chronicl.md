@@ -51,6 +51,12 @@
 
 
 ## JOURNAL
+@malkin0xb8 12.05.26
+- Fixed two concurrency bugs that caused issues under load: all pooled connections were sharing a single OCI-P session ID (causing BroadWorks to reject or confuse concurrent requests), and concurrent calls to command() could race into authenticate() simultaneously.
+- Each PooledConnection now generates its own UUID session ID at creation time. The XML builder receives the session ID from the connection rather than a shared requester-level field.
+- Added an asyncio.Lock with double-checked locking in Client.command() so that no matter how many coroutines arrive unauthenticated at once, only one authenticate() call is made.
+- Auth failures now close the TCP socket immediately rather than leaking the connection.
+
 @malkin0xb8 16.01.26
 - Project has been split: the async version is now a separate project called "mercury-ocip-fast"
 - Major architectural changes:
@@ -218,4 +224,4 @@ I noticed that returns from the request do not fit convential OCITable structure
 
 @KiPageFault
 - Modified Parser To Fix Nested Conversions When Multiple OCIType Objects Were Translated
-- Modified OCITable To Construct Table Entries On Initialisation 
+- Modified OCITable To Construct Table Entries On Initialisation

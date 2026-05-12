@@ -67,7 +67,6 @@ class TestAsyncTCPRequester:
         assert requester.tls is False
         assert requester.session_id == "test-session-123"
         assert requester._pool is not None
-        assert requester._session_id_bytes == b"test-session-123"
         mock_logger.info.assert_called()
 
     def test_initialization_with_tls(self, mock_logger, pool_config):
@@ -87,7 +86,7 @@ class TestAsyncTCPRequester:
     def test_build_oci_xml_single_command(self, requester):
         """Test _build_oci_xml creates correct XML for single command."""
         command = '<command xmlns="" xsi:type="TestCommand"><param>value</param></command>'
-        result = requester._build_oci_xml(command)
+        result = requester._build_oci_xml(command, b"test-session-123")
 
         assert isinstance(result, bytes)
         assert b'<?xml version="1.0" encoding="ISO-8859-1"?>' in result
@@ -103,7 +102,7 @@ class TestAsyncTCPRequester:
             '<command xmlns="" xsi:type="Command1"></command>',
             '<command xmlns="" xsi:type="Command2"></command>',
         ]
-        result = requester._build_oci_xml(commands)
+        result = requester._build_oci_xml(commands, b"test-session-123")
 
         assert isinstance(result, bytes)
         assert b"Command1" in result
@@ -114,7 +113,7 @@ class TestAsyncTCPRequester:
     def test_build_oci_xml_encodes_special_characters(self, requester):
         """Test _build_oci_xml handles ISO-8859-1 encoding."""
         command = '<command><param>café</param></command>'
-        result = requester._build_oci_xml(command)
+        result = requester._build_oci_xml(command, b"test-session-123")
 
         assert isinstance(result, bytes)
         assert "café".encode("ISO-8859-1") in result
@@ -138,6 +137,7 @@ class TestAsyncTCPRequester:
         mock_conn = MagicMock(spec=PooledConnection)
         mock_conn.reader = mock_reader
         mock_conn.writer = mock_writer
+        mock_conn.session_id = "test-conn-session"
 
         @asynccontextmanager
         async def mock_acquire(existing_conn=None):
@@ -165,6 +165,7 @@ class TestAsyncTCPRequester:
         mock_conn = MagicMock(spec=PooledConnection)
         mock_conn.reader = mock_reader
         mock_conn.writer = mock_writer
+        mock_conn.session_id = "test-conn-session"
 
         @asynccontextmanager
         async def mock_acquire(existing_conn=None):
@@ -199,6 +200,7 @@ class TestAsyncTCPRequester:
         mock_conn = MagicMock(spec=PooledConnection)
         mock_conn.reader = mock_reader
         mock_conn.writer = mock_writer
+        mock_conn.session_id = "test-conn-session"
 
         @asynccontextmanager
         async def mock_acquire(existing_conn=None):
@@ -232,6 +234,7 @@ class TestAsyncTCPRequester:
         mock_conn = MagicMock(spec=PooledConnection)
         mock_conn.reader = mock_reader
         mock_conn.writer = mock_writer
+        mock_conn.session_id = "test-conn-session"
 
         @asynccontextmanager
         async def mock_acquire(existing_conn=None):
@@ -261,6 +264,7 @@ class TestAsyncTCPRequester:
         mock_conn = MagicMock(spec=PooledConnection)
         mock_conn.reader = mock_reader
         mock_conn.writer = mock_writer
+        mock_conn.session_id = "test-conn-session"
 
         call_count = 0
 
@@ -314,8 +318,8 @@ class TestAsyncTCPRequester:
         mock_logger.warning.assert_called()
 
     @pytest.mark.asyncio
-    async def test_send_bytes_reads_until_document_end(self, requester_with_mock_pool, mock_pool):
-        """Test _send_bytes reads chunks until </BroadsoftDocument> is found."""
+    async def test_send_commands_reads_until_document_end(self, requester_with_mock_pool, mock_pool):
+        """Test _send_commands reads chunks until </BroadsoftDocument> is found."""
         mock_reader = AsyncMock()
         mock_writer = AsyncMock()
         mock_writer.writelines = Mock()
@@ -335,6 +339,7 @@ class TestAsyncTCPRequester:
         mock_conn = MagicMock(spec=PooledConnection)
         mock_conn.reader = mock_reader
         mock_conn.writer = mock_writer
+        mock_conn.session_id = "test-conn-session"
 
         @asynccontextmanager
         async def mock_acquire(existing_conn=None):
@@ -342,15 +347,15 @@ class TestAsyncTCPRequester:
 
         mock_pool.acquire = mock_acquire
 
-        result = await requester_with_mock_pool._send_bytes(b"<test/>")
+        result = await requester_with_mock_pool._send_commands("<test/>")
 
         assert "BroadsoftDocument" in result
         assert "sessionId" in result
         assert result.endswith("</BroadsoftDocument>")
 
     @pytest.mark.asyncio
-    async def test_send_bytes_handles_empty_chunks(self, requester_with_mock_pool, mock_pool):
-        """Test _send_bytes stops on empty chunk (connection closed)."""
+    async def test_send_commands_handles_empty_chunks(self, requester_with_mock_pool, mock_pool):
+        """Test _send_commands stops on empty chunk (connection closed)."""
         mock_reader = AsyncMock()
         mock_writer = AsyncMock()
         mock_writer.writelines = Mock()
@@ -364,6 +369,7 @@ class TestAsyncTCPRequester:
         mock_conn = MagicMock(spec=PooledConnection)
         mock_conn.reader = mock_reader
         mock_conn.writer = mock_writer
+        mock_conn.session_id = "test-conn-session"
 
         @asynccontextmanager
         async def mock_acquire(existing_conn=None):
@@ -371,7 +377,7 @@ class TestAsyncTCPRequester:
 
         mock_pool.acquire = mock_acquire
 
-        result = await requester_with_mock_pool._send_bytes(b"<test/>")
+        result = await requester_with_mock_pool._send_commands("<test/>")
 
         assert result == "<partial>data"
 
