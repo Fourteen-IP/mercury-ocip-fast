@@ -28,7 +28,7 @@ async with Client(
     print(response.first_name)
 ```
 
-The client handles authentication automatically. Both TLS and non-TLS connections are supported.
+The client handles authentication automatically. It speaks both transports BroadWorks exposes: raw TCP (the default) and SOAP, over TLS or plain connections. See [SOAP transport](#soap-transport) for the SOAP-specific bits.
 
 ## Bulk operations
 
@@ -70,6 +70,8 @@ async with Client(
     responses = await client.command([...])
 ```
 
+`warm()` works for both transports. On TCP it opens connections; on SOAP it opens and logs in sessions (see below). Warming matters more for SOAP, because sessions are otherwise created lazily one at a time, and each one fetches the WSDL and logs in before it can be used.
+
 ## Pool configuration
 
 The connection pool can be configured for your specific workload:
@@ -98,6 +100,61 @@ async with Client(
 
 Start with conservative values and adjust based on your BroadWorks cluster capacity.
 
+## SOAP transport
+
+Set `conn_type="SOAP"` and pass the full SOAP endpoint URL as the host (no `?wsdl` suffix):
+
+```python
+from mercury_ocip_fast import Client
+from mercury_ocip_fast.commands.commands import UserGetRequest21sp1
+
+async with Client(
+    host="https://your-broadworks.server/webservice/services/ProvisioningService",
+    username="admin",
+    password="your-password",
+    conn_type="SOAP",
+) as client:
+    response = await client.command(UserGetRequest21sp1(user_id="user@domain.com"))
+    print(response.first_name)
+```
+
+Everything else (single commands, bulk lists, response handling) works exactly as it does over TCP, so code is portable between the two transports.
+
+### How SOAP pooling works
+
+BroadWorks ties an OCI-P login to the HTTP session (its `JSESSIONID` cookie), not to the session id in the request body. So instead of one shared SOAP client, mercury-ocip-fast keeps a pool of independently logged-in **sessions**, each with its own HTTP client, its own cookie jar, and its own session id. This is the SOAP equivalent of the TCP connection pool: each session handles one request at a time, and requests fan out across the pool.
+
+Because each session logs in once and is reused, you get several authenticated sessions running concurrently rather than serialising everything through a single login.
+
+### SOAP configuration
+
+Use `SOAPPoolConfig` to size the session pool:
+
+```python
+from mercury_ocip_fast import Client
+from mercury_ocip_fast.pool import SOAPPoolConfig
+
+config = SOAPPoolConfig(
+    pool_size=8,            # Number of logged-in sessions (also the concurrency limit)
+    acquire_timeout=30.0,   # How long to wait for a free session
+    max_session_age=300.0,  # Re-authenticate sessions after 5 minutes
+    idle_timeout=60.0,      # Close sessions idle longer than this
+    verify_ssl=True,        # Verify the server's TLS certificate
+)
+
+async with Client(
+    host="https://your-broadworks.server/webservice/services/ProvisioningService",
+    username="admin",
+    password="your-password",
+    conn_type="SOAP",
+    config=config,
+) as client:
+    await client.warm()  # Open and log in all 8 sessions up front
+    responses = await client.command([...])
+```
+
+`pool_size` is both the number of sessions and the maximum number of requests in flight at once, since a session serves one request at a time. Raise it to send more in parallel, within what your BroadWorks cluster can take.
+
 ## TLS and non-TLS
 
 The default is TLS on port 2209:
@@ -124,7 +181,29 @@ async with Client(
     pass
 ```
 
-The authentication flow adjusts automatically based on the TLS setting.
+The login flow adjusts automatically based on the `tls` setting:
+
+- **TLS on:** a single `LoginRequest22V5`. On TCP the socket is wrapped in SSL; on SOAP the endpoint is HTTPS. Either way the channel is encrypted, so the password is sent directly.
+- **TLS off:** the two-step flow, an `AuthenticationRequest` for a nonce followed by a hashed `LoginRequest14sp4`, so the password never travels in plaintext.
+
+For SOAP, whether the connection is HTTP or HTTPS follows the host URL you pass; the `tls` flag only selects which login flow is used.
+
+## Monitoring the pool
+
+`pool_stats` reports how busy the pool is, and `session_ids` lists the session id of every connection or session currently open:
+
+```python
+async with Client(host=..., username=..., password=..., conn_type="SOAP") as client:
+    await client.warm()
+
+    print(client.pool_stats)
+    # {'total_sessions': 8, 'available': 8, 'in_use': 0, 'waiting': 0, 'pool_size': 8}
+
+    print(client.session_ids)
+    # ['7c61848c-...', '83ee21b1-...', ...]
+```
+
+`session_ids` only reflects what has actually been opened, so call `warm()` first if you want the whole pool listed. Treat the ids as secrets.
 
 ## Response handling
 
@@ -211,4 +290,12 @@ users = asyncio.run(get_all_group_users("sales-team"))
 
 See the [Commands Reference](/commands/) for available OCI-P commands.
 
+### Client
+
 ::: mercury_ocip_fast.client
+
+### Pool configuration and transport pools
+
+::: mercury_ocip_fast.pool
+
+::: mercury_ocip_fast.soap_pool
