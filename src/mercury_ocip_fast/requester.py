@@ -1,29 +1,49 @@
-import attrs
-import logging
 import asyncio
+import logging
 from itertools import batched
-from typing import Union, Optional, Callable, Awaitable
+from typing import Awaitable, Callable, Optional, Union
 
-from mercury_ocip_fast.pool import PoolConfig, TCPConnectionPool, PooledConnection
-from mercury_ocip_fast.exceptions import MErrorSocketTimeout, MError
+import attrs
+import httpx
 
-_XML_DECLARATION = b'<?xml version="1.0" encoding="ISO-8859-1"?>'
-_BROADSOFT_DOC_START = b'<BroadsoftDocument protocol="OCI" xmlns="C" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
-_BROADSOFT_DOC_END = b"</BroadsoftDocument>"
-_SESSION_ID_TEMPLATE = b'<sessionId xmlns="">%s</sessionId>'
+from mercury_ocip_fast.exceptions import (
+    MError,
+    MErrorSendRequestFailed,
+    MErrorSocketTimeout,
+)
+from mercury_ocip_fast.pool import (
+    PoolConfig,
+    PooledConnection,
+    SOAPPoolConfig,
+    TCPConnectionPool,
+)
+from mercury_ocip_fast.soap_pool import SOAPSession, SOAPSessionPool
+
+
+def _build_oci_xml(commands: Union[str, list[str]], session_id: str) -> str:
+    """Wrap one or more OCI commands in the BroadsoftDocument envelope BroadWorks expects."""
+    payload = "\n".join(commands) if isinstance(commands, list) else commands
+    return (
+        '<?xml version="1.0" encoding="ISO-8859-1"?>'
+        '<BroadsoftDocument protocol="OCI" xmlns="C"'
+        ' xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+        f'<sessionId xmlns="">{session_id}</sessionId>'
+        f"{payload}"
+        "</BroadsoftDocument>"
+    )
 
 
 @attrs.define(kw_only=True)
 class AsyncTCPRequester:
-    """A requester for BroadWorks OCI-P.
+    """Talks to BroadWorks over a raw OCI-P socket, pooling its connections.
 
     Args:
-        host: The Broadworks Server IP (e.g adp.broadworks.com).
-        port: The port of the Broadworks Server, usually 2208 for non-TLS / 2209 for TLS.
-        config: The timeout and general pool settings.
-        tls: Whether to use a secure wrapped socket.
-        session_id: The session_id to send in requests.
-        logger: The logger object to retrieve logs and information.
+        host: The BroadWorks server address (e.g. adp.broadworks.com).
+        port: The server port — usually 2208 for plain, 2209 for TLS.
+        config: Pool sizing and timeout settings.
+        tls: Whether to wrap the socket in TLS.
+        session_id: The session id to send with requests.
+        logger: Where to send logs.
     """
 
     host: str
@@ -50,23 +70,23 @@ class AsyncTCPRequester:
         )
 
     async def warm(self, count: int | None = None) -> int:
-        """Pre-warm the connection pool for faster bulk requests.
+        """Open connections up front, allows faster command processing instead of cold-boot.
 
         Args:
-            count: Number of connections to create. Defaults to pool max.
+            count: How many connections to open. Defaults to the pool max.
 
         Returns:
-            Number of connections created.
+            How many connections actually opened.
         """
         if self._pool is None:
             return 0
         return await self._pool.warm(count)
 
     async def close(self, wait_timeout: float = 10.0) -> None:
-        """Disconnects from the server and closes the pool.
+        """Disconnect from the server and tear the pool down.
 
         Args:
-            wait_timeout: Maximum seconds to wait for in-flight operations to complete.
+            wait_timeout: How long to wait for in-flight requests to finish first.
         """
         if self._pool:
             try:
@@ -78,17 +98,18 @@ class AsyncTCPRequester:
     async def send_request(
         self, command: str, conn: Optional[PooledConnection] = None
     ) -> str:
-        """Sends a request to the server.
+        """Send one command and return the server's response.
 
         Args:
-            command (str): The XML command string to send to the server.
+            command: The XML command string to send.
+            conn: An existing connection to reuse (used during login).
 
         Returns:
-            The response from the server as a decoded string.
+            The server's response, decoded to a string.
 
         Raises:
-            MErrorSendRequestFailed: If the request fails to send.
-            MErrorSocketTimeout: If the socket read times out.
+            MErrorSendRequestFailed: if the request can't be sent.
+            MErrorSocketTimeout: if the read times out.
         """
         self.logger.debug(f"Sending command to {self.host}")
         return await self._send_commands(command, conn=conn)
@@ -96,20 +117,21 @@ class AsyncTCPRequester:
     async def send_bulk_request(
         self, commands: list[str], batch_size: int = 15
     ) -> list[str]:
-        """Sends multiple requests to the server in concurrent batches.
+        """Send a pile of commands at once, in concurrent batches.
 
-        Batches are variable but default to 15 as per the OCIP Spec: "4.3: It is recommended to limit the number of actions to no more than 15 transactions"
+        We default to 15 commands per batch because the OCI-P spec (4.3)
+        recommends keeping each message to no more than 15 transactions.
 
         Args:
-            commands (list[str]): The commands to send to the server.
-            batch_size (int): The amount of commands per message.
+            commands: All the commands to send.
+            batch_size: How many to pack into each message.
 
         Returns:
-            List of responses from the server, one per batch (order preserved).
+            One response per batch, in the same order they went out.
 
         Raises:
-            MError: If the pool fails to initialise.
-            MErrorSocketTimeout: If the socket read times out.
+            MError: if the pool failed to start up.
+            MErrorSocketTimeout: if a read times out.
         """
         chunks = [list(chunk) for chunk in batched(commands, n=batch_size)]
 
@@ -126,28 +148,30 @@ class AsyncTCPRequester:
     async def _send_commands(
         self, commands: Union[str, list[str]], conn: Optional[PooledConnection] = None
     ) -> str:
-        """Sends a command (or list of commands) to the BroadWorks server.
+        """Send a command (or batch) and read the reply off the socket.
 
-        Acquires a connection, builds the OCI XML using that connection's unique
-        session ID, writes the payload, and reads until the closing document tag.
+        Grabs a connection, wraps the command(s) in that connection's own
+        session id, writes it out, and reads until the closing document tag.
 
         Args:
-            commands: A single XML command string or list of command strings.
-            conn: Optional existing connection to reuse (e.g. during auth).
+            commands: One command string, or a list of them.
+            conn: An existing connection to reuse (used during login).
 
         Returns:
-            response (str): The response from the server
+            The server's response.
 
         Raises:
-            MError: If the pool fails to init or network errors occur
-            MErrorSocketTimeout: If the socket read times out.
+            MError: if the pool isn't ready or the network fails.
+            MErrorSocketTimeout: if the read times out.
         """
         if self._pool is None:
             raise MError("Pool failed to initialise")
 
         async with self._pool.acquire(existing_conn=conn) as conn:
-            payload = self._build_oci_xml(commands, conn.session_id.encode("ISO-8859-1"))
-            self.logger.debug(f"Sending {len(payload)} bytes to {self.host} (session={conn.session_id})")
+            payload = _build_oci_xml(commands, conn.session_id).encode("ISO-8859-1")
+            self.logger.debug(
+                f"Sending {len(payload)} bytes to {self.host} (session={conn.session_id})"
+            )
             self.logger.debug(f">>> OUTGOING REQUEST:\n{payload.decode('ISO-8859-1')}")
 
             try:
@@ -192,30 +216,134 @@ class AsyncTCPRequester:
                 self.logger.error(f"Failed to decode response: {e}")
                 raise MError(f"Invalid response encoding: {e}") from e
 
-    def _build_oci_xml(self, commands: Union[str, list[str]], session_id_bytes: bytes) -> bytes:
-        """Builds an OCI XML request from the given command(s).
 
-        Constructs an XML document with a session ID and the encoded command(s),
-        wrapped in a BroadsoftDocument element with the OCI protocol.
+@attrs.define(kw_only=True)
+class AsyncSOAPRequester:
+    """Talks to BroadWorks over SOAP, with a pool of logged-in sessions behind it.
+
+    Every request runs on a session borrowed from the pool (its zeep client
+    already holds that session's login cookie), so up to ``config.pool_size``
+    requests can be in flight at once, each on its own BroadWorks session. The
+    pool logs a session in through ``auth_callback`` as soon as it creates one.
+    The split matches the TCP side: the pool looks after session lifecycle, the
+    requester does the actual sending.
+
+    Args:
+        host: The SOAP endpoint URL (e.g. https://bw.example.com/webservice/services/ProvisioningService).
+        config: Session-pool sizing and timeouts.
+        session_id: A default session id, kept only for API compatibility —
+            pooled sessions each carry their own.
+        logger: Where to send logs.
+        auth_callback: Coroutine that logs a newly created session in.
+    """
+
+    host: str
+    config: SOAPPoolConfig = attrs.Factory(SOAPPoolConfig)
+    session_id: str
+    logger: logging.Logger
+    auth_callback: Callable[[SOAPSession], Awaitable[None]] | None = None
+    _pool: SOAPSessionPool | None = attrs.field(default=None, alias="_pool")
+
+    def __attrs_post_init__(self) -> None:
+        self.logger.info(f"Initializing SOAP requester for {self.host}")
+        self._pool = SOAPSessionPool(
+            host=self.host,
+            config=self.config,
+            logger=self.logger,
+            auth_callback=self.auth_callback,
+        )
+
+    @property
+    def session_ids(self) -> list[str]:
+        """The session ids of every logged-in session in the pool."""
+        return self._pool.session_ids if self._pool else []
+
+    async def warm(self, count: int | None = None) -> int:
+        """Open and log in sessions up front. Defaults to a full pool."""
+        if self._pool is None:
+            return 0
+        return await self._pool.warm(count)
+
+    async def close(self, wait_timeout: float = 10.0) -> None:
+        """Close every session and shut the pool down."""
+        if self._pool:
+            try:
+                await self._pool.close(wait_timeout=wait_timeout)
+                self.logger.debug("SOAP session pool closed")
+            except Exception as e:
+                self.logger.warning(f"Error closing SOAP session pool: {e}")
+
+    async def send_request(
+        self, command: str, session: Optional[SOAPSession] = None
+    ) -> str:
+        """Send one command on a logged-in session from the pool.
 
         Args:
-            commands (str | list[str]): A single command string or list of command strings.
-            session_id_bytes: The session ID for this connection, encoded as ISO-8859-1.
+            command: XML command string from command.to_xml().
+            session: An existing session to reuse (used during login).
 
         Returns:
-            The serialized XML document as bytes, encoded with ISO-8859-1.
+            The OCI response XML.
         """
-        if isinstance(commands, list):
-            commands_payload = "\n".join(commands).encode("ISO-8859-1")
-        else:
-            commands_payload = commands.encode("ISO-8859-1")
+        self.logger.debug(f"Sending SOAP command to {self.host}")
+        return await self._send_soap(command, session=session)
 
-        return b"".join(
-            [
-                _XML_DECLARATION,
-                _BROADSOFT_DOC_START,
-                _SESSION_ID_TEMPLATE % session_id_bytes,
-                commands_payload,
-                _BROADSOFT_DOC_END,
-            ]
+    async def send_bulk_request(
+        self, commands: list[str], batch_size: int = 15
+    ) -> list[str]:
+        """Send a batch of commands at once, spread across the pool's sessions.
+
+        Args:
+            commands: All the command strings to send.
+            batch_size: How many to pack per SOAP message (15 max, per the spec).
+
+        Returns:
+            One response per batch, in the order they went out.
+        """
+        chunks = [list(chunk) for chunk in batched(commands, n=batch_size)]
+        self.logger.info(
+            f"Sending SOAP bulk request: {len(commands)} commands in {len(chunks)} "
+            f"batches (batch_size={batch_size})"
         )
+        tasks = [self._send_soap(chunk) for chunk in chunks]
+        return list(await asyncio.gather(*tasks))
+
+    async def _send_soap(
+        self, commands: Union[str, list[str]], session: Optional[SOAPSession] = None
+    ) -> str:
+        """Borrow a session, build the envelope, and call processOCIMessage.
+
+        Args:
+            commands: One command string, or a list of them.
+            session: An existing session to reuse (used during login).
+
+        Returns:
+            The OCI response XML.
+
+        Raises:
+            MError: if the pool failed to start up.
+            MErrorSocketTimeout: if the HTTP request times out.
+            MErrorSendRequestFailed: for any other SOAP/transport failure.
+        """
+        if self._pool is None:
+            raise MError("SOAP session pool failed to initialise")
+
+        async with self._pool.acquire(existing_session=session) as session:
+            oci_xml = _build_oci_xml(commands, session.session_id)
+            self.logger.debug(
+                f">>> SOAP OCI XML (session={session.session_id}):\n{oci_xml}"
+            )
+
+            try:
+                response: str = await session.zeep_client.service.processOCIMessage(
+                    oci_xml
+                )
+            except httpx.TimeoutException as e:
+                self.logger.error(f"SOAP request timed out: {e}")
+                raise MErrorSocketTimeout(str(e)) from e
+            except Exception as e:
+                self.logger.error(f"SOAP request failed: {e}")
+                raise MErrorSendRequestFailed(str(e)) from e
+
+            self.logger.debug(f"<<< SOAP RESPONSE:\n{response}")
+            return response
