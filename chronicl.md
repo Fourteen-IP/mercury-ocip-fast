@@ -51,6 +51,9 @@
 
 
 ## JOURNAL
+@malkin0xb8 08.06.26
+Overhauled the client to use a new SOAP pool for stateless connections. Updated docs with specifics but it acts the same as TCP, opening many connections, tracking session-ids, etc.
+
 @malkin0xb8 12.05.26
 - Fixed two concurrency bugs that caused issues under load: all pooled connections were sharing a single OCI-P session ID (causing BroadWorks to reject or confuse concurrent requests), and concurrent calls to command() could race into authenticate() simultaneously.
 - Each PooledConnection now generates its own UUID session ID at creation time. The XML builder receives the session ID from the connection rather than a shared requester-level field.

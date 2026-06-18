@@ -105,7 +105,7 @@ class TestClient:
             assert client.username == "user"
             assert client.password == "pass"
             assert client.tls is True
-            assert client.user_agent == "Broadworks SDK"
+            assert client.user_agent == "Mercury OCIP Fast Client"
             assert client.session_id is not None
             assert client._authenticated is False
 
@@ -376,21 +376,19 @@ class TestClient:
     async def test_warm_delegates_to_requester(self, client, mock_requester):
         """Test warm() delegates to requester."""
         mock_requester.warm.return_value = 10
-        result = await client.warm(connection_amount=10)
+        result = await client.warm(10)
 
         assert result == 10
         mock_requester.warm.assert_called_once_with(10)
 
     @pytest.mark.asyncio
-    async def test_disconnect(self, client, mock_requester):
-        """Test _disconnect() resets state and closes requester."""
+    async def test_shutdown(self, client, mock_requester):
+        """Test shutdown() resets auth state and closes the requester."""
         object.__setattr__(client, "_authenticated", True)
-        object.__setattr__(client, "session_id", "test-session")
 
-        await client._disconnect()
+        await client.shutdown()
 
         assert client._authenticated is False
-        assert client.session_id == ""
         mock_requester.close.assert_called_once()
 
     def test_receive_response_raises_merror(self, client):

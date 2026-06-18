@@ -274,7 +274,7 @@ def test_to_dict_from_xml_preserves_attributes_and_nil():
 
 def test_nillable_type_creates_null_field():
     ob = AlternateNumberEntry21(phone_number="").to_xml()
-    assert ob == '<command xmlns="" xsi:type="AlternateNumberEntry21"><phoneNumber C:nil="true"/></command>'
+    assert ob == '<command xmlns="" xsi:type="AlternateNumberEntry21"><phoneNumber C:nil="true"></phoneNumber></command>'
 
 def test_type_key_appended_to_inherited_objects():
     xml = OutgoingCallingPlanOriginatingDepartmentPermissionsModify(

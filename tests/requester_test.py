@@ -5,7 +5,7 @@ import asyncio
 from unittest.mock import Mock, AsyncMock, patch, MagicMock
 from contextlib import asynccontextmanager
 
-from mercury_ocip_fast.requester import AsyncTCPRequester
+from mercury_ocip_fast.requester import AsyncTCPRequester, _build_oci_xml
 from mercury_ocip_fast.pool import PoolConfig, PooledConnection
 from mercury_ocip_fast.exceptions import MError, MErrorSocketTimeout
 
@@ -83,40 +83,42 @@ class TestAsyncTCPRequester:
         assert requester.tls is True
         assert requester._pool.tls is True
 
-    def test_build_oci_xml_single_command(self, requester):
+    def test_build_oci_xml_single_command(self):
         """Test _build_oci_xml creates correct XML for single command."""
         command = '<command xmlns="" xsi:type="TestCommand"><param>value</param></command>'
-        result = requester._build_oci_xml(command, b"test-session-123")
+        result = _build_oci_xml(command, "test-session-123")
 
-        assert isinstance(result, bytes)
-        assert b'<?xml version="1.0" encoding="ISO-8859-1"?>' in result
-        assert b'<BroadsoftDocument protocol="OCI"' in result
-        assert b"<sessionId" in result
-        assert b"test-session-123" in result
-        assert b"TestCommand" in result
-        assert b"</BroadsoftDocument>" in result
+        assert isinstance(result, str)
+        assert '<?xml version="1.0" encoding="ISO-8859-1"?>' in result
+        assert '<BroadsoftDocument protocol="OCI"' in result
+        assert "<sessionId" in result
+        assert "test-session-123" in result
+        assert "TestCommand" in result
+        assert "</BroadsoftDocument>" in result
 
-    def test_build_oci_xml_multiple_commands(self, requester):
+    def test_build_oci_xml_multiple_commands(self):
         """Test _build_oci_xml creates correct XML for multiple commands."""
         commands = [
             '<command xmlns="" xsi:type="Command1"></command>',
             '<command xmlns="" xsi:type="Command2"></command>',
         ]
-        result = requester._build_oci_xml(commands, b"test-session-123")
+        result = _build_oci_xml(commands, "test-session-123")
 
-        assert isinstance(result, bytes)
-        assert b"Command1" in result
-        assert b"Command2" in result
+        assert isinstance(result, str)
+        assert "Command1" in result
+        assert "Command2" in result
         # Commands should be joined with newline
-        assert result.count(b"<command") == 2
+        assert result.count("<command") == 2
 
-    def test_build_oci_xml_encodes_special_characters(self, requester):
-        """Test _build_oci_xml handles ISO-8859-1 encoding."""
-        command = '<command><param>café</param></command>'
-        result = requester._build_oci_xml(command, b"test-session-123")
+    def test_build_oci_xml_encodes_special_characters(self):
+        """Test _build_oci_xml output round-trips through ISO-8859-1 encoding."""
+        command = "<command><param>café</param></command>"
+        result = _build_oci_xml(command, "test-session-123")
 
-        assert isinstance(result, bytes)
-        assert "café".encode("ISO-8859-1") in result
+        assert isinstance(result, str)
+        assert "café" in result
+        # The TCP transport encodes the document as ISO-8859-1 before sending.
+        assert "café".encode("ISO-8859-1") in result.encode("ISO-8859-1")
 
     @pytest.mark.asyncio
     async def test_send_request_success(self, requester_with_mock_pool, mock_pool):

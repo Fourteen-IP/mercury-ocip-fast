@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import asyncio
-import attr
 import logging
 import ssl
 import time
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import AsyncIterator, Callable, Awaitable
+from typing import AsyncIterator, Awaitable, Callable
+
+import attr
 
 from mercury_ocip_fast.exceptions import (
     MErrorSocketInitialisation,
@@ -18,7 +19,7 @@ from mercury_ocip_fast.exceptions import (
 
 @dataclass(slots=True)
 class PoolConfig:
-    """Configuration for the connection pool.
+    """Settings for the TCP connection pool.
 
     Attributes:
         max_connections: Maximum connections in pool.
@@ -42,16 +43,53 @@ class PoolConfig:
 
 
 @dataclass(slots=True)
-class PooledConnection:
-    """A pooled TCP connection wrapper.
+class SOAPPoolConfig:
+    """Settings for the SOAP session pool.
+
+    Each pooled SOAP session is its own logged-in zeep client backed by its own
+    httpx client, so it has its own JSESSIONID cookie jar and OCI-P session id.
+    It's the SOAP stand-in for a pooled TCP connection.
 
     Attributes:
-        reader: asyncio StreamReader for receiving data.
-        writer: asyncio StreamWriter for sending data.
-        session_id: Unique OCI-P session identifier for this connection.
-        created_at: Timestamp when connection was established.
-        last_used: Timestamp of last successful operation.
-        in_use: Whether this connection is currently checked out.
+        pool_size: Number of authenticated SOAP sessions to maintain.
+        acquire_timeout: Seconds to wait for an available session.
+        max_session_age: Recycle (re-authenticate) sessions after this many seconds.
+        idle_timeout: Close sessions idle longer than this many seconds.
+        max_connections: Maximum HTTP connections per session's httpx client.
+        max_keepalive_connections: Maximum idle keep-alive connections per session.
+        keepalive_expiry: Seconds before an idle HTTP connection is closed.
+        connect_timeout: Seconds to wait when establishing a connection.
+        read_timeout: Seconds to wait for a server response.
+        write_timeout: Seconds to wait while sending the request.
+        pool_timeout: Seconds to wait for an HTTP connection from httpx's pool.
+        verify_ssl: Whether to verify SSL certificates.
+    """
+
+    pool_size: int = 4
+    acquire_timeout: float = 30.0
+    max_session_age: float = 300.0
+    idle_timeout: float = 60.0
+    max_connections: int = 100
+    max_keepalive_connections: int = 20
+    keepalive_expiry: float = 30.0
+    connect_timeout: float = 10.0
+    read_timeout: float = 30.0
+    write_timeout: float = 10.0
+    pool_timeout: float = 5.0
+    verify_ssl: bool = True
+
+
+@dataclass(slots=True)
+class PooledConnection:
+    """One TCP connection plus the bookkeeping the pool needs to manage it.
+
+    Attributes:
+        reader: asyncio StreamReader for reading replies.
+        writer: asyncio StreamWriter for sending requests.
+        session_id: The OCI-P session id this connection uses.
+        created_at: When the connection was opened.
+        last_used: When it last did something successfully.
+        in_use: True while it's checked out of the pool.
     """
 
     reader: asyncio.StreamReader
@@ -62,31 +100,19 @@ class PooledConnection:
     in_use: bool = False
 
     def is_stale(self, max_age_seconds: float) -> bool:
-        """Check if connection has exceeded its maximum lifetime.
-
-        Args:
-            max_age_seconds: Maximum age before connection is considered stale
-
-        Returns:
-            True if connection should be recycled
-        """
-
+        """Has this connection been around longer than we want to keep it?"""
         return (time.monotonic() - self.created_at) > max_age_seconds
 
     def idle_time(self) -> float:
-        """How long since this connection was last used."""
+        """Seconds since the connection was last used."""
         return time.monotonic() - self.last_used
 
     def touch(self) -> None:
-        """Update last_used timestamp after successful operation."""
+        """Mark the connection as just used."""
         self.last_used = time.monotonic()
 
     def is_healthy(self) -> bool:
-        """Check if the connection is likely still alive.
-
-        Returns:
-            False if connection is definitely dead, True if it might be alive.
-        """
+        """Is the connection still usable?"""
         if self.writer.is_closing():
             return False
 
@@ -99,21 +125,21 @@ class PooledConnection:
         return True
 
     async def close(self) -> None:
-        """Gracefully close the underlying TCP connection."""
+        """Close the TCP connection."""
         try:
             self.writer.close()
             await self.writer.wait_closed()
         except Exception:
-            # Connection might already be dead
+            # Already gone — nothing to do.
             pass
 
 
 @attr.s(slots=True, kw_only=True)
 class TCPConnectionPool:
-    """Async TCP connection pool for BroadWorks OCI-P connections.
+    """A pool of reusable TCP connections to BroadWorks.
 
-    Manages a pool of reusable TCP connections with configurable limits,
-    timeouts, and connection lifecycle management.
+    Hands out connections, reuses them when it can, and looks after their
+    limits, timeouts, and lifecycle.
     """
 
     host: str = attr.ib()
@@ -139,13 +165,10 @@ class TCPConnectionPool:
         )
 
     async def _create_conn(self) -> PooledConnection:
-        """Create a new TCP connection to the BroadWorks server.
-
-        Returns:
-            A new PooledConnection wrapping the TCP stream.
+        """Open a fresh TCP connection to the server.
 
         Raises:
-            MErrorSocketInitialisation: Connection timeout or OS error.
+            MErrorSocketInitialisation: if the connect times out or generic network issue occurs.
         """
         ssl_context = ssl.create_default_context() if self.tls else None
 
@@ -165,13 +188,14 @@ class TCPConnectionPool:
         return PooledConnection(reader=reader, writer=writer)
 
     async def _get_or_create_conn(self) -> PooledConnection:
-        """Get an available connection from the pool, or create a new one.
+        """Hand back a ready connection: reuse one, open a new one, or wait.
 
-        Returns:
-            A PooledConnection ready for use.
+        Pulls from the pool first (dropping anything stale, idle, or dead on the
+        way), opens and logs in a new connection if there's still room, and only
+        then queues up behind whoever's currently using the pool.
 
         Raises:
-            MErrorSocketTimeout: Timed out waiting for available connection.
+            MErrorSocketTimeout: if nothing frees up within ``acquire_timeout``.
         """
         waiter: asyncio.Future[PooledConnection] | None = None
         conns_to_close: list[PooledConnection] = []
@@ -254,26 +278,30 @@ class TCPConnectionPool:
             )
 
     async def _close_remove_conn(self, conn: PooledConnection) -> None:
-        """Close and remove a connection from the Pool."""
+        """Close a connection and drop it from the pool's bookkeeping."""
         await conn.close()
         self._all_connections.remove(conn)
 
     async def _close_connections(self, conns: list[PooledConnection]) -> None:
-        """Close multiple connections concurrently (fire-and-forget cleanup)."""
+        """Close a batch of discarded connections; used for fire-and-forget cleanup."""
         for conn in conns:
             try:
                 await conn.close()
             except Exception:
-                pass  # Connection might already be dead
+                pass  # Already gone.
 
     async def _return_connection(
         self, conn: PooledConnection, healthy: bool = True
     ) -> None:
-        """Return a connection to the pool after use.
+        """Take a connection back once a request is done.
+
+        If it's broken, the pool is shutting down, or it's old, we
+        close it. Otherwise it goes to whoever's been waiting, or back into the
+        pool for the next caller.
 
         Args:
-            conn: The connection to return.
-            healthy: False if an error occurred (connection may be broken).
+            conn: The connection being returned.
+            healthy: Pass False if the connection is unhealthy.
         """
         conn.in_use = False
 
@@ -319,19 +347,22 @@ class TCPConnectionPool:
 
     @asynccontextmanager
     async def acquire(self, existing_conn=None) -> AsyncIterator[PooledConnection]:
-        """Acquire a connection from the pool.
+        """Borrow a connection for the length of one request.
 
-        Usage:
+        Use it as a context manager so the connection always finds its way back
+        to the pool, even if the request raises::
+
             async with pool.acquire() as conn:
                 conn.writer.write(data)
                 await conn.writer.drain()
 
-        Yields:
-            A PooledConnection for sending/receiving data.
+        Args:
+            existing_conn: Skip the pool and use this exact connection instead
+                (handy during login, when we already have it in hand).
 
         Raises:
-            RuntimeError: Pool has been closed.
-            MErrorSocketTimeout: Timed out waiting for connection.
+            RuntimeError: if the pool has already been closed.
+            MErrorSocketTimeout: if no connection frees up in time.
         """
         if self._closed:
             raise RuntimeError("Pool is closed.")
@@ -353,13 +384,13 @@ class TCPConnectionPool:
                 await self._return_connection(conn, healthy)
 
     async def warm(self, count: int | None = None) -> int:
-        """Pre-create connections to avoid cold-start latency.
+        """Open connections up front, allows faster command processing instead of cold-boot.
 
         Args:
-            count: Number of connections to create. Defaults to max_connections.
+            count: How many connections to open. Defaults to max_connections.
 
         Returns:
-            Number of connections actually created.
+            How many actually opened (raises failures).
         """
         if count is None:
             count = self.config.max_connections
@@ -403,10 +434,13 @@ class TCPConnectionPool:
         return created
 
     async def close(self, wait_timeout: float = 10.0) -> None:
-        """Close all connections and shutdown the pool.
+        """Shut the pool down, closing every connection.
+
+        Gives in-flight requests a chance to finish first, then stops waiting
+        once ``wait_timeout`` is up and closes whatever's left.
 
         Args:
-            wait_timeout: Maximum seconds to wait for in-flight operations to complete.
+            wait_timeout: How long to wait for busy connections before giving up.
         """
         self._closed = True
 
@@ -449,7 +483,7 @@ class TCPConnectionPool:
 
     @property
     def stats(self) -> dict[str, int]:
-        """Get current pool statistics for monitoring."""
+        """A snapshot of how busy the pool is, handy for monitoring."""
         available = self._pool.qsize()
         total = len(self._all_connections)
 
