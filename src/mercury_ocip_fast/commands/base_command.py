@@ -1,5 +1,5 @@
 from dataclasses import dataclass, fields, is_dataclass
-from typing import Any, Optional, TypeVar, get_type_hints
+from typing import Any, Generic, Optional, TypeVar, get_type_hints
 
 from mercury_ocip_fast.utils.defines import to_snake_case
 from mercury_ocip_fast.utils.parser import Parser
@@ -55,6 +55,12 @@ class OCIType:
         return Parser.to_class_from_xml(xml, cls)
 
 
+# Bound to OCIDataResponse (defined below); the response type a given request
+# expects back. Lets command()/authenticate() return T instead of the bare
+# CommandResult union when the caller's request is typed as OCIRequest[T].
+TResponse = TypeVar("TResponse", bound="OCIDataResponse")
+
+
 class OCICommand(OCIType):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -69,7 +75,7 @@ class OCINil:
     pass
 
 
-class OCIRequest(OCICommand):
+class OCIRequest(OCICommand, Generic[TResponse]):
     pass
 
 

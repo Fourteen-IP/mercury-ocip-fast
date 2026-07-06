@@ -4,7 +4,7 @@ import logging
 import sys
 import uuid
 from abc import ABC, abstractmethod
-from typing import Awaitable, Callable, Literal, Optional, Union, cast
+from typing import Awaitable, Callable, Literal, Optional, Union, cast, overload
 
 import attrs
 
@@ -12,15 +12,23 @@ from mercury_ocip_fast.commands import commands
 from mercury_ocip_fast.commands.base_command import (
     ErrorResponse,
     OCICommand,
+    OCIRequest,
     SuccessResponse,
+    TResponse,
 )
 from mercury_ocip_fast.commands.commands import (
     AuthenticationRequest,
     AuthenticationResponse,
     LoginRequest14sp4,
     LoginRequest22V5,
+    LoginResponse14sp4,
+    LoginResponse22V5,
 )
-from mercury_ocip_fast.exceptions import MError
+from mercury_ocip_fast.exceptions import (
+    MError,
+    MErrorFailedAuthentication,
+    MErrorResponse,
+)
 from mercury_ocip_fast.libs.types import CommandInput, CommandResult, RequestResult
 from mercury_ocip_fast.pool import PoolConfig, PooledConnection, SOAPPoolConfig
 from mercury_ocip_fast.requester import AsyncSOAPRequester, AsyncTCPRequester
@@ -41,6 +49,13 @@ class FakeDispatchTable:
 
 class BaseClient(ABC):
     """Abstract base for all async BroadWorks OCI-P clients."""
+
+    @overload
+    async def command(
+        self, command: OCIRequest[TResponse]
+    ) -> Union[SuccessResponse, TResponse]: ...
+    @overload
+    async def command(self, command: list[CommandInput]) -> list[CommandResult]: ...
 
     @abstractmethod
     async def command(
@@ -142,7 +157,7 @@ class Client(BaseClient):
 
     SOAP will take longer to open sessions than TCP.
 
-    Pass ``command()`` a list and it batches automatically — 15 per message, as
+    Pass ``command()`` a list and it batches automatically, 15 per message, as
     the OCI-P spec suggests.
 
     When TLS is off the login hashes your password (``LoginRequest14sp4``) so it
@@ -243,6 +258,13 @@ class Client(BaseClient):
 
         return _on_new_session
 
+    @overload
+    async def command(
+        self, command: OCIRequest[TResponse]
+    ) -> Union[SuccessResponse, TResponse]: ...
+    @overload
+    async def command(self, command: list[CommandInput]) -> list[CommandResult]: ...
+
     async def command(
         self, command: Union[CommandInput, list[CommandInput]]
     ) -> Union[CommandResult, list[CommandResult]]:
@@ -250,19 +272,25 @@ class Client(BaseClient):
 
         Logs in on the first call if it hasn't already (Auth timeout).
 
-        Give it a single command and you get a single result back; give it a list and it batches them into
-        concurrent requests (per the OCI-P spec) and returns a list of results.
+        Give it a single command and you get its response back — a single
+        failed command raises ``MErrorResponse`` (with the decoded
+        ``ErrorResponse`` on ``.context``) rather than returning the error, so
+        the happy path needs no isinstance checks.
 
-        Listed commands will return in the order they were sent
+        Give it a list and it batches them into concurrent requests (per the
+        OCI-P spec) and returns a list of results in the order they were sent.
+        Batch results keep failures as ``ErrorResponse`` values in the list so
+        that failed commands dont ruin the whole list.
 
         Args:
             command: One command, or a list of them.
 
         Returns:
-            A single result for a single command, or a list for a list.
+            A single response for a single command, or a list for a list.
 
         Raises:
-            MError: if a command fails or its response can't be parsed.
+            MErrorResponse: if a single command comes back as an ``ErrorResponse``.
+            MError: if a response can't be parsed or the transport fails.
         """
         # TCP authenticates the client up front; SOAP sessions each authenticate
         # themselves the moment the pool creates them (via the auth callback).
@@ -286,13 +314,19 @@ class Client(BaseClient):
         response = await self._requester.send_request(
             cast(OCICommand, command).to_xml()
         )
-        return self._receive_response(response)
+        result = self._receive_response(response)
+        if isinstance(result, ErrorResponse):
+            raise MErrorResponse(
+                message=f"{type(command).__name__} failed: {result.summary}",
+                context=result,
+            )
+        return result
 
     async def authenticate(
         self,
         conn: Optional[PooledConnection] = None,
         session: Optional[SOAPSession] = None,
-    ) -> CommandResult:
+    ) -> Optional[Union[LoginResponse22V5, LoginResponse14sp4]]:
         """Log in to the BroadWorks server.
 
         With TLS it's a single login; without it, the two-step hashed-password
@@ -345,16 +379,10 @@ class Client(BaseClient):
         self._authenticated = True
         return login_response
 
-    async def _login(self, send: Callable[[str], Awaitable[str]]) -> CommandResult:
+    async def _login(
+        self, send: Callable[[str], Awaitable[str]]
+    ) -> Union[LoginResponse22V5, LoginResponse14sp4]:
         """Walk through the OCI-P login steps, sending each one via ``send``.
-
-        ``send`` takes a single command's XML and hands back the raw response.
-        Where it goes (which TCP connection or SOAP session, and under what
-        session id) is the caller's problem — all this does is run the login
-        commands in order and check that each one came back happy.
-
-        With TLS that's one ``LoginRequest22V5``; without it, the two-step
-        ``AuthenticationRequest`` then hashed ``LoginRequest14sp4``.
 
         Raises:
             MError: if any step of the login fails.
@@ -368,14 +396,18 @@ class Client(BaseClient):
                 )
             )
             if isinstance(login_response, ErrorResponse):
-                raise MError(f"Failed to authenticate: {login_response.summary}")
-            return login_response
+                raise MErrorFailedAuthentication(
+                    f"Failed to authenticate: {login_response.summary}"
+                )
+            return cast(LoginResponse22V5, login_response)
 
         auth_response = self._receive_response(
             await send(AuthenticationRequest(user_id=self.username).to_xml())
         )
         if isinstance(auth_response, ErrorResponse):
-            raise MError(f"Auth request failed: {auth_response.summary}")
+            raise MErrorFailedAuthentication(
+                f"Auth request failed: {auth_response.summary}"
+            )
         if not isinstance(auth_response, AuthenticationResponse):
             raise MError("Unexpected response from AuthenticationRequest")
 
@@ -393,8 +425,10 @@ class Client(BaseClient):
             )
         )
         if isinstance(login_response, ErrorResponse):
-            raise MError(f"Failed to authenticate: {login_response.summary}")
-        return login_response
+            raise MErrorFailedAuthentication(
+                f"Failed to authenticate: {login_response.summary}"
+            )
+        return cast(LoginResponse14sp4, login_response)
 
     async def warm(self, count: int | None = None) -> int:
         """Open a defined amount of connections and authenticate them.
@@ -410,6 +444,35 @@ class Client(BaseClient):
             How many actually authenticated and came up.
         """
         return await self._requester.warm(count)
+
+    def export_soap_session(self) -> tuple[str, str] | None:
+        """The (JSESSIONID, OCI-P sessionId) identity of a logged-in SOAP session.
+
+        Returns the pair from the first pooled session, or None if no session
+        has logged in yet. The two values only work together as BroadWorks pairs
+        the cookie with the in-body session id at login and rejects requests
+        carrying a mismatched pair, so never store or hand out one without the
+        other.
+
+        The exported identity outlives ``shutdown()``: closing this client only
+        drops the local httpx clients, while BroadWorks keeps the session alive
+        server-side until its idle timeout or an explicit ``LogoutRequest``.
+        Resume it elsewhere with ``AsyncSOAPRequester.detached_session()``.
+
+        Raises:
+            ValueError: on a TCP client as TCP sessions live and die with their
+                socket and can't be exported.
+        """
+        if self.conn_type != "SOAP":
+            raise ValueError("export_soap_session() only works on SOAP clients")
+        pool = cast(AsyncSOAPRequester, self._requester)._pool
+        if not pool or not pool._all_sessions:
+            return None
+        session = pool._all_sessions[0]
+        jsessionid = session.jsessionid
+        if jsessionid is None:
+            return None
+        return jsessionid, session.session_id
 
     async def shutdown(self, wait_timeout: float = 30.0) -> None:
         """Close the client down and let go of everything it's holding.

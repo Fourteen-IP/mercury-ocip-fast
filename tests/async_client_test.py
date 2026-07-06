@@ -4,15 +4,18 @@ import pytest
 import logging
 from unittest.mock import Mock, AsyncMock, patch
 
+import httpx
+
 from mercury_ocip_fast.client import Client, FakeDispatchTable
 from mercury_ocip_fast.pool import PoolConfig
 from mercury_ocip_fast.requester import AsyncTCPRequester
+from mercury_ocip_fast.soap_pool import SOAPSession
 from mercury_ocip_fast.commands.base_command import (
     ErrorResponse,
     SuccessResponse,
     OCIResponse,
 )
-from mercury_ocip_fast.exceptions import MError
+from mercury_ocip_fast.exceptions import MError, MErrorResponse
 
 
 class MockCommand:
@@ -338,6 +341,77 @@ class TestClient:
         assert isinstance(result, SuccessResponse)
 
     @pytest.mark.asyncio
+    async def test_command_single_raises_on_error_response(
+        self, mock_logger, pool_config
+    ):
+        """A failed single command raises MErrorResponse with the decoded
+        ErrorResponse attached, instead of returning it."""
+        mock_req = Mock(spec=AsyncTCPRequester)
+        mock_req.send_request = AsyncMock(return_value='''<?xml version="1.0"?>
+<BroadsoftDocument xmlns="C" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+<command xsi:type="c:ErrorResponse">
+<errorCode>4501</errorCode>
+<summary>[Error 4501] User not found</summary>
+<summaryEnglish>[Error 4501] User not found</summaryEnglish>
+</command>
+</BroadsoftDocument>''')
+
+        with patch.object(AsyncTCPRequester, "__attrs_post_init__"):
+            client = Client(
+                host="localhost",
+                username="admin",
+                password="password",
+                config=pool_config,
+                logger=mock_logger,
+            )
+            object.__setattr__(client, "_requester", mock_req)
+            object.__setattr__(client, "_authenticated", True)
+
+        with pytest.raises(MErrorResponse) as exc_info:
+            await client.command(MockCommand())
+
+        assert "User not found" in str(exc_info.value)
+        assert isinstance(exc_info.value.context, ErrorResponse)
+        assert exc_info.value.context.summary == "[Error 4501] User not found"
+
+    @pytest.mark.asyncio
+    async def test_command_bulk_keeps_error_responses_as_values(
+        self, mock_logger, pool_config
+    ):
+        """A batch never raises on per-command failures — errors come back in
+        the result list so the successful commands' outcomes survive."""
+        mock_req = Mock(spec=AsyncTCPRequester)
+        mock_req.send_bulk_request = AsyncMock(return_value=[
+            '''<?xml version="1.0"?>
+<BroadsoftDocument xmlns="C" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+</BroadsoftDocument>''',
+            '''<?xml version="1.0"?>
+<BroadsoftDocument xmlns="C" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+<command xsi:type="c:ErrorResponse">
+<errorCode>4501</errorCode>
+<summary>[Error 4501] User not found</summary>
+<summaryEnglish>[Error 4501] User not found</summaryEnglish>
+</command>
+</BroadsoftDocument>''',
+        ])
+
+        with patch.object(AsyncTCPRequester, "__attrs_post_init__"):
+            client = Client(
+                host="localhost",
+                username="admin",
+                password="password",
+                config=pool_config,
+                logger=mock_logger,
+            )
+            object.__setattr__(client, "_requester", mock_req)
+            object.__setattr__(client, "_authenticated", True)
+
+        result = await client.command([MockCommand(), MockCommand()])
+
+        assert isinstance(result[0], SuccessResponse)
+        assert isinstance(result[1], ErrorResponse)
+
+    @pytest.mark.asyncio
     async def test_command_bulk(self, mock_logger, pool_config):
         """Test command() with list of commands."""
         mock_req = Mock(spec=AsyncTCPRequester)
@@ -521,6 +595,46 @@ class TestClient:
             )
 
             assert isinstance(client.logger, logging.Logger)
+
+    @staticmethod
+    def _soap_client() -> Client:
+        return Client(
+            host="https://bw.example.com/webservice/Service",
+            username="user",
+            password="pass",
+            conn_type="SOAP",
+        )
+
+    def test_export_soap_session_returns_the_pair(self):
+        client = self._soap_client()
+        http = Mock()
+        http.cookies = httpx.Cookies()
+        session = SOAPSession(zeep_client=Mock(), http_client=http)
+        session.adopt_identity("COOKIE-VALUE", "oci-session-id")
+        client._requester._pool._all_sessions.append(session)
+
+        assert client.export_soap_session() == ("COOKIE-VALUE", "oci-session-id")
+
+    def test_export_soap_session_none_before_any_login(self):
+        assert self._soap_client().export_soap_session() is None
+
+    def test_export_soap_session_none_without_cookie(self):
+        """A session that never logged in has no JSESSIONID — export nothing
+        rather than half a pair."""
+        client = self._soap_client()
+        http = Mock()
+        http.cookies = httpx.Cookies()
+        client._requester._pool._all_sessions.append(
+            SOAPSession(zeep_client=Mock(), http_client=http)
+        )
+
+        assert client.export_soap_session() is None
+
+    def test_export_soap_session_rejects_tcp_clients(self):
+        with patch.object(AsyncTCPRequester, "__attrs_post_init__"):
+            client = Client(host="localhost", username="user", password="pass")
+        with pytest.raises(ValueError):
+            client.export_soap_session()
 
 
 class TestClientIntegration:
