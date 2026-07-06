@@ -118,3 +118,12 @@ class MErrorFailedXMLConversion(MError):
     """
 
     pass
+
+
+@attr.s(slots=True, frozen=True)
+class MErrorFailedAuthentication(MError):
+    """
+    Exception raised when Client Authentication fails.
+    """
+
+    pass

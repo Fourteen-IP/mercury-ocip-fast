@@ -394,7 +394,7 @@ dependencies = [
     { name = "attrs" },
     { name = "httpx" },
     { name = "xmltodict" },
-    { name = "zeep" },
+    { name = "zeep", extra = ["async"] },
 ]
 
 [package.dev-dependencies]
@@ -419,7 +419,7 @@ requires-dist = [
     { name = "attrs", specifier = ">=21.4.0" },
     { name = "httpx", specifier = ">=0.28.0" },
     { name = "xmltodict", specifier = ">=1.0.2" },
-    { name = "zeep", specifier = ">=4.2.0" },
+    { name = "zeep", extras = ["async"], specifier = ">=4.2.0" },
 ]
 
 [package.metadata.requires-dev]
@@ -1055,4 +1055,10 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/e8/06/4f1d3ff61e930163565fb73616c6251e412a4d2fc7ed18214e1c2107258d/zeep-4.3.2.tar.gz", hash = "sha256:1a23a667ce9d73a0dbfdf15745bfa2b7ab0b6402135c0cd5067574838398e0e6", size = 166687, upload-time = "2025-09-15T10:26:03.4Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/cd/78/f43f3feb70d67cbe260ec5b682ecc3c1850c8f437f1df707495126e51817/zeep-4.3.2-py3-none-any.whl", hash = "sha256:ed08c3179709172bfaaa9b76a6a545f8a57043ec6218e64e9deb81ff1e0ff79b", size = 101853, upload-time = "2025-09-15T10:26:02.12Z" },
+]
+
+[package.optional-dependencies]
+async = [
+    { name = "httpx" },
+    { name = "packaging" },
 ]

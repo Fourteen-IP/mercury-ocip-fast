@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mercury-ocip-fast"
-version = "v2.0.0"
+version = "v2.1.0"
 description = "Asynchronous Python SDK for BroadWorks OCI (Open Client Interface) API"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -50,7 +50,7 @@ dependencies = [
     "attrs>=21.4.0",
     "httpx>=0.28.0",
     "xmltodict>=1.0.2",
-    "zeep>=4.2.0",
+    "zeep[async]>=4.2.0",
 ]
 
 [tool.pytest.ini_options]

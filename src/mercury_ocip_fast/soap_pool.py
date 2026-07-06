@@ -46,6 +46,31 @@ class SOAPSession:
     last_used: float = field(default_factory=time.monotonic)
     in_use: bool = False
 
+    @property
+    def jsessionid(self) -> str | None:
+        """This session's BroadWorks JSESSIONID cookie, or None before login.
+
+        Together with ``session_id`` this makes up the session's full identity:
+        BroadWorks pairs the cookie with the in-body OCI-P session id at login
+        and rejects requests that carry one without the other. Export them
+        together (see ``Client.export_soap_session``) or not at all.
+        """
+        return self.http_client.cookies.get("JSESSIONID")
+
+    def adopt_identity(self, jsessionid: str, session_id: str) -> None:
+        """Take on the identity of an existing logged-in BroadWorks session.
+
+        Points this session's cookie jar and OCI-P session id at a login that
+        happened elsewhere, so requests sent on it resume that session instead
+        of needing their own login.
+
+        Args:
+            jsessionid: The JSESSIONID cookie value from the original login.
+            session_id: The OCI-P session id paired with that cookie.
+        """
+        self.http_client.cookies.set("JSESSIONID", jsessionid)
+        self.session_id = session_id
+
     def is_stale(self, max_age_seconds: float) -> bool:
         """Has this session been around longer than we want to keep it?"""
         return (time.monotonic() - self.created_at) > max_age_seconds
@@ -154,6 +179,27 @@ class SOAPSessionPool:
         self.logger.debug(f"Created SOAP session for {self.host}")
         return SOAPSession(zeep_client=zeep_client, http_client=http_client)
 
+    async def create_detached_session(
+        self, jsessionid: str, session_id: str
+    ) -> SOAPSession:
+        """Build a session that resumes an existing BroadWorks login.
+
+        The session is *not* tracked by the pool and never logged in here — it
+        adopts the given (JSESSIONID, session id) pair instead. The caller owns
+        it and must ``close()`` it when done. Send on it by passing it straight
+        to the requester: ``requester.send_request(xml, session=session)``.
+
+        Args:
+            jsessionid: The JSESSIONID cookie value from the original login.
+            session_id: The OCI-P session id paired with that cookie.
+
+        Raises:
+            MErrorSocketInitialisation: if the WSDL fetch or client setup fails.
+        """
+        session = await self._create_session()
+        session.adopt_identity(jsessionid, session_id)
+        return session
+
     async def _get_or_create_session(self) -> SOAPSession:
         """Hand back a ready session: reuse one, make a new one, or wait for one.
 
@@ -164,7 +210,6 @@ class SOAPSessionPool:
         Raises:
             MErrorSocketTimeout: if nothing frees up within ``acquire_timeout``.
         """
-        waiter: asyncio.Future[SOAPSession] | None = None
         sessions_to_close: list[SOAPSession] = []
 
         async with self._lock:
@@ -259,9 +304,7 @@ class SOAPSessionPool:
             except Exception:
                 pass  # Already gone.
 
-    async def _return_session(
-        self, session: SOAPSession, healthy: bool = True
-    ) -> None:
+    async def _return_session(self, session: SOAPSession, healthy: bool = True) -> None:
         """Take a session back once a request is done.
 
         If it's broken, the pool is shutting down, or it's simply too old, we

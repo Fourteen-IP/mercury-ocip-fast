@@ -4,6 +4,7 @@ import asyncio
 import time
 from unittest.mock import AsyncMock, Mock
 
+import httpx
 import pytest
 
 from mercury_ocip_fast.exceptions import MErrorSocketTimeout
@@ -95,6 +96,18 @@ class TestSOAPSession:
         session = make_session()
         session.http_client.aclose = AsyncMock(side_effect=RuntimeError("boom"))
         await session.close()  # must not raise
+
+    def test_jsessionid_none_before_login(self):
+        session = make_session()
+        session.http_client.cookies = httpx.Cookies()
+        assert session.jsessionid is None
+
+    def test_adopt_identity_sets_both_halves_of_the_pair(self):
+        session = make_session()
+        session.http_client.cookies = httpx.Cookies()
+        session.adopt_identity("COOKIE-VALUE", "oci-session-id")
+        assert session.jsessionid == "COOKIE-VALUE"
+        assert session.session_id == "oci-session-id"
 
 
 # --------------------------------------------------------------------------- #
@@ -319,3 +332,21 @@ class TestSOAPSessionPool:
         await pool.warm()
         assert sorted(pool.session_ids) == sorted(s.session_id for s in pool._all_sessions)
         assert len(pool.session_ids) == 3
+
+    @pytest.mark.asyncio
+    async def test_create_detached_session_adopts_pair_and_is_untracked(
+        self, pool_builder
+    ):
+        auth = AsyncMock()
+        pool = pool_builder(auth_callback=auth)
+
+        session = await pool.create_detached_session("COOKIE-VALUE", "oci-session-id")
+
+        session.http_client.cookies.set.assert_called_once_with(
+            "JSESSIONID", "COOKIE-VALUE"
+        )
+        assert session.session_id == "oci-session-id"
+        # Detached means: never logged in here, never tracked by the pool.
+        auth.assert_not_awaited()
+        assert session not in pool._all_sessions
+        assert pool._pool.qsize() == 0

@@ -264,6 +264,21 @@ class AsyncSOAPRequester:
             return 0
         return await self._pool.warm(count)
 
+    async def detached_session(self, jsessionid: str, session_id: str) -> SOAPSession:
+        """Build a session that resumes an existing BroadWorks login.
+
+        Not tracked by the pool and never logged in here — it adopts the given
+        (JSESSIONID, session id) pair. The caller owns it and must ``close()``
+        it; send on it via ``send_request(xml, session=session)``.
+
+        Raises:
+            MError: if the pool failed to initialise.
+            MErrorSocketInitialisation: if the WSDL fetch or client setup fails.
+        """
+        if self._pool is None:
+            raise MError("SOAP session pool failed to initialise")
+        return await self._pool.create_detached_session(jsessionid, session_id)
+
     async def close(self, wait_timeout: float = 10.0) -> None:
         """Close every session and shut the pool down."""
         if self._pool:
