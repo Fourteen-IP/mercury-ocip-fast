@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import uuid
 
 import attrs
@@ -23,19 +24,25 @@ from mercury_ocip_fast_v2.utils.envelopes import (
     wrap_soap,
 )
 
+logger = logging.getLogger(__name__)
+
 
 @attrs.define(kw_only=True, slots=True)
 class SOAPSessionAtom(SessionAtom):
-    """A whole SOAP session: a httpx client, and login metadata.
+    """A SOAP session for BroadWorks.
 
-    The session owns its transport (an httpx client with its own cookie jar)
-    and its identity. ``pair`` contains the session id's for login, and by default
-    will contain a fresh uuid: ``session_id``.
+    The session owns its transport and its identity. The transport is an
+    httpx client. The client has its own cookie jar. The cookie jar holds
+    the JSESSIONID cookie after a login.
+
+    The session also has an OCI-P ``session_id``. This id goes in the body
+    of each message. The class makes a new UUID for the id by default.
 
     Attributes:
-        endpoint: The SOAP service URL.
-        http_client: The httpx client that holds this session's cookie jar.
-        pair: The session identity, set once the session is logged in.
+        endpoint: The URL of the SOAP service.
+        http_client: The httpx client. It holds this session's cookie jar.
+        settings: The timeouts for the httpx client.
+        session_id: The OCI-P session id for each message body.
     """
 
     endpoint: str
@@ -45,14 +52,36 @@ class SOAPSessionAtom(SessionAtom):
 
     @classmethod
     def open(
-        cls, endpoint: str, *, settings: SOAPSessionSettings, verify_ssl: bool = True
+        cls,
+        endpoint: str,
+        *,
+        settings: SOAPSessionSettings,
+        verify_ssl: bool = True,
     ) -> SOAPSessionAtom:
-        """Make a fresh, logged-out session with its own httpx client."""
+        """Make a new SOAP session. The session is not logged in.
 
+        The new session has its own httpx client. The client has no
+        cookies. A login must run before the session can send commands.
+
+        Args:
+            endpoint: The URL of the SOAP service.
+            settings: The timeouts for the httpx client.
+            verify_ssl: If true, verify the TLS certificate of the server.
+
+        Returns:
+            A new SOAP session.
+        """
         timeout = httpx.Timeout(
             connect=settings.connect_timeout,
             read=settings.read_timeout,
             write=settings.write_timeout,
+        )
+
+        logger.debug(
+            "Open a SOAP session to %s, connect timeout %ss, read timeout %ss",
+            endpoint,
+            settings.connect_timeout,
+            settings.read_timeout,
         )
 
         return cls(
@@ -70,36 +99,79 @@ class SOAPSessionAtom(SessionAtom):
         settings: SOAPSessionSettings,
         verify_ssl: bool = True,
     ) -> SOAPSessionAtom:
-        """Make a session that adopts a given session pair."""
+        """Make a SOAP session from a stored session pair.
+
+        Use this method to continue a session after a restart. The new
+        session takes the JSESSIONID cookie and the OCI-P session id from
+        the pair. The server then accepts the session as logged in.
+
+        Args:
+            endpoint: The URL of the SOAP service.
+            pair: The stored identity. It holds the cookie and the id.
+            settings: The timeouts for the httpx client.
+            verify_ssl: If true, verify the TLS certificate of the server.
+
+        Returns:
+            A SOAP session that uses the given pair.
+        """
         session = cls.open(endpoint, settings=settings, verify_ssl=verify_ssl)
         session.http_client.cookies.set("JSESSIONID", pair.jsessionid)
         session.session_id = pair.session_id
+
+        logger.debug("Resume a SOAP session to %s from a stored pair", endpoint)
+
         return session
 
     @property
     def jsessionid(self) -> str | None:
-        """This session's JSESSIONID cookie, None if before login.
+        """The JSESSIONID cookie of this session.
 
-        **Do not log**
-        This is a highly sensitive credential, and gives access to an authenticated session.
+        The value is None before the login.
+
+        Do not write this value to a log. It is a secret. A person who has
+        this value can send commands as the user.
         """
         return self.http_client.cookies.get("JSESSIONID")
 
     @property
     def pair(self) -> SessionPair:
-        """The session pair being currently used. Useful for `resume`.
+        """The session pair of this session. Store it to resume later.
 
         Raises:
-            MErrorMissingSessionIdentity: If the session has not logged in yet.
+            MErrorMissingSessionIdentity: If the session has no login yet.
         """
         jsessionid = self.jsessionid
         if not jsessionid:
-            raise MErrorMissingSessionIdentity
+            raise MErrorMissingSessionIdentity()
         return SessionPair(jsessionid=jsessionid, session_id=self.session_id)
 
     async def send(self, payload: str | list[str]) -> str:
+        """Send one envelope to the server and return one reply.
+
+        This method wraps the payload in the BroadsoftDocument and then in
+        the SOAP envelope. It posts the envelope with the httpx client. The
+        JSESSIONID cookie goes with the request. The method then gets the
+        OCI reply from the response.
+
+        Do not write the payload or the reply to a log. They can hold
+        secrets, for example a password in a login command.
+
+        Args:
+            payload: One OCI command, or a list of OCI commands.
+
+        Returns:
+            The OCI reply as a string.
+
+        Raises:
+            MErrorHttpStatus: If the server returns a non-2xx HTTP status.
+            MErrorHttpTimeout: If the request does not complete in time.
+            MErrorHttpInitialisation: If the client cannot connect.
+            MErrorHttpDropped: If the connection stops during the request.
+        """
         oci_xml = build_broadsoft_envelope(payload, self.session_id)
         soap_envelope = wrap_soap(oci_xml)
+
+        logger.debug("Send %d bytes to %s", len(soap_envelope), self.endpoint)
 
         try:
             response = await self.http_client.post(
@@ -109,25 +181,54 @@ class SOAPSessionAtom(SessionAtom):
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
+            logger.warning(
+                "The server %s returned HTTP %d", self.endpoint, e.response.status_code
+            )
             raise MErrorHttpStatus(
                 f"BroadWorks returned HTTP {e.response.status_code}",
-                e.response.status_code,
+                status=e.response.status_code,
             ) from e
         except httpx.TimeoutException as e:
+            logger.warning("The request to %s timed out: %s", self.endpoint, e)
             raise MErrorHttpTimeout(str(e)) from e
         except httpx.ConnectError as e:
+            logger.warning("Cannot connect to %s: %s", self.endpoint, e)
             raise MErrorHttpInitialisation(str(e)) from e
-        except httpx.TransportError as e:  # read/write/protocol errors mid-flight
+        except httpx.TransportError as e:  # a read, write, or protocol error
+            logger.warning(
+                "The connection to %s dropped mid-request: %s", self.endpoint, e
+            )
             raise MErrorHttpDropped(str(e)) from e
+
+        logger.debug(
+            "Receive %d bytes from %s, HTTP %d",
+            len(response.text),
+            self.endpoint,
+            response.status_code,
+        )
 
         return unwrap_soap(response.text)
 
     async def close(self) -> None:
-        """Close the httpx client, taking its cookie jar and sockets with it."""
+        """Close the httpx client.
+
+        This closes the cookie jar and the open sockets. The method is safe
+        to call more than once.
+        """
+        logger.debug("Close the SOAP session to %s", self.endpoint)
         try:
             await self.http_client.aclose()
-        except Exception:
-            pass
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "The connection to %s raised an exception while closing: %s",
+                self.endpoint,
+                e,
+            )
 
     def is_healthy(self) -> bool:
+        """Tell if the session is still usable.
+
+        The session is healthy if the client is open and it holds a
+        JSESSIONID cookie.
+        """
         return not self.http_client.is_closed and self.jsessionid is not None

@@ -9,7 +9,7 @@ import attrs
 class MError(Exception):
     """Base Exception raised by mercury-ocip-fast.
 
-    attributes:
+    Attributes:
         message: Why something failed
     """
 
@@ -55,7 +55,7 @@ class MErrorHttpDropped(MErrorTransport):
 class MErrorHttpStatus(MErrorTransport):
     """BroadWorks returned a non-2xx HTTP status."""
 
-    status: int = attrs.field()
+    status: int = attrs.field(kw_only=True)
 
 
 @attrs.define(slots=True, frozen=True)
