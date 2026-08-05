@@ -1,7 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
+
+
+@dataclass(frozen=True, slots=True)
+class TCPSessionSettings:
+    connect_timeout: int = field(default=30)
+    read_timeout: int = field(default=30)
+    read_chunk_size: int = field(default=8192)
 
 
 @dataclass(frozen=True, slots=True)
