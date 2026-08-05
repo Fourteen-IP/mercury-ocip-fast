@@ -5,8 +5,18 @@ import uuid
 import attrs
 import httpx
 
-from mercury_ocip_fast_v2.exceptions import MErrorMissingSessionIdentity
-from mercury_ocip_fast_v2.session.session import SessionAtom, SessionPair
+from mercury_ocip_fast_v2.exceptions import (
+    MErrorHttpDropped,
+    MErrorHttpInitialisation,
+    MErrorHttpStatus,
+    MErrorHttpTimeout,
+    MErrorMissingSessionIdentity,
+)
+from mercury_ocip_fast_v2.session.session import (
+    SessionAtom,
+    SessionPair,
+    SOAPSessionSettings,
+)
 from mercury_ocip_fast_v2.utils.envelopes import (
     build_broadsoft_envelope,
     unwrap_soap,
@@ -30,19 +40,38 @@ class SOAPSessionAtom(SessionAtom):
 
     endpoint: str
     http_client: httpx.AsyncClient
+    settings: SOAPSessionSettings = attrs.field(default=SOAPSessionSettings())
     session_id: str = attrs.field(factory=lambda: str(uuid.uuid4()))
 
     @classmethod
-    def open(cls, endpoint: str, *, verify_ssl: bool = True) -> SOAPSessionAtom:
+    def open(
+        cls, endpoint: str, *, settings: SOAPSessionSettings, verify_ssl: bool = True
+    ) -> SOAPSessionAtom:
         """Make a fresh, logged-out session with its own httpx client."""
-        return cls(endpoint=endpoint, http_client=httpx.AsyncClient(verify=verify_ssl))
+
+        timeout = httpx.Timeout(
+            connect=settings.connect_timeout,
+            read=settings.read_timeout,
+            write=settings.write_timeout,
+        )
+
+        return cls(
+            endpoint=endpoint,
+            http_client=httpx.AsyncClient(verify=verify_ssl, timeout=timeout),
+            settings=settings,
+        )
 
     @classmethod
     def resume(
-        cls, endpoint: str, pair: SessionPair, *, verify_ssl: bool = True
+        cls,
+        endpoint: str,
+        pair: SessionPair,
+        *,
+        settings: SOAPSessionSettings,
+        verify_ssl: bool = True,
     ) -> SOAPSessionAtom:
         """Make a session that adopts a given session pair."""
-        session = cls.open(endpoint, verify_ssl=verify_ssl)
+        session = cls.open(endpoint, settings=settings, verify_ssl=verify_ssl)
         session.http_client.cookies.set("JSESSIONID", pair.jsessionid)
         session.session_id = pair.session_id
         return session
@@ -72,12 +101,24 @@ class SOAPSessionAtom(SessionAtom):
         oci_xml = build_broadsoft_envelope(payload, self.session_id)
         soap_envelope = wrap_soap(oci_xml)
 
-        response = await self.http_client.post(
-            self.endpoint,
-            content=soap_envelope.encode("utf-8"),
-            headers={"Content-Type": "text/xml; charset=UTF-8", "SOAPAction": ""},
-        )
-        response.raise_for_status()
+        try:
+            response = await self.http_client.post(
+                self.endpoint,
+                content=soap_envelope.encode("utf-8"),
+                headers={"Content-Type": "text/xml; charset=UTF-8", "SOAPAction": ""},
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            raise MErrorHttpStatus(
+                f"BroadWorks returned HTTP {e.response.status_code}",
+                e.response.status_code,
+            ) from e
+        except httpx.TimeoutException as e:
+            raise MErrorHttpTimeout(str(e)) from e
+        except httpx.ConnectError as e:
+            raise MErrorHttpInitialisation(str(e)) from e
+        except httpx.TransportError as e:  # read/write/protocol errors mid-flight
+            raise MErrorHttpDropped(str(e)) from e
 
         return unwrap_soap(response.text)
 
@@ -87,3 +128,6 @@ class SOAPSessionAtom(SessionAtom):
             await self.http_client.aclose()
         except Exception:
             pass
+
+    def is_healthy(self) -> bool:
+        return not self.http_client.is_closed and self.jsessionid is not None

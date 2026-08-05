@@ -8,9 +8,9 @@ from ssl import SSLContext
 import attrs
 
 from mercury_ocip_fast_v2.exceptions import (
+    MErrorMalformedResponse,
     MErrorSocketDropped,
     MErrorSocketInitialisation,
-    MErrorSocketMalformedPayload,
     MErrorSocketTimeout,
 )
 from mercury_ocip_fast_v2.session.session import SessionAtom, TCPSessionSettings
@@ -89,7 +89,7 @@ class TCPSessionAtom(SessionAtom):
         try:
             response = content.rstrip(b"\n").decode()
         except UnicodeDecodeError as e:
-            raise MErrorSocketMalformedPayload(
+            raise MErrorMalformedResponse(
                 f"Broadworks returned with a byte response which could not be decoded: {e}"
             ) from e
 

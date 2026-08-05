@@ -4,6 +4,8 @@ import xml.etree.ElementTree as ET
 from enum import StrEnum
 from html import escape
 
+from mercury_ocip_fast_v2.exceptions import MErrorMalformedResponse
+
 
 class SoapWsdl(StrEnum):
     SOAP_NS = "http://schemas.xmlsoap.org/soap/envelope/"
@@ -45,11 +47,12 @@ def unwrap_soap(response_xml: str) -> str:
     The reply document sits as text inside the return element. The XML parser
     unescapes it for us, so its text is the OCI XML we want.
     """
-    root = ET.fromstring(response_xml)
+
+    try:
+        root = ET.fromstring(response_xml)
+    except ET.ParseError as e:
+        raise MErrorMalformedResponse(f"SOAP envelope was not well-formed: {e}") from e
     for elem in root.iter():
-        if (
-            elem.tag.rsplit("}", 1)[-1] == SoapWsdl.RETURN
-        ):  # strip {ns}, match localname
-            if elem.text:
-                return elem.text
-    raise ValueError("No processOCIMessageReturn in SOAP response")
+        if elem.tag.rsplit("}", 1)[-1] == "processOCIMessageReturn" and elem.text:
+            return elem.text
+    raise MErrorMalformedResponse("No processOCIMessageReturn in SOAP response")

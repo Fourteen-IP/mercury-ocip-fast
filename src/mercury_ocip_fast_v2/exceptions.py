@@ -9,11 +9,11 @@ import attrs
 class MError(Exception):
     """Base Exception raised by mercury-ocip-fast.
 
-    attrsibutes:
+    attributes:
         message: Why something failed
     """
 
-    message: str = attrs.field(default="An error occurred in unknown project name")
+    message: str = attrs.field(default="An error occurred in mercury-ocip-fast")
 
     def __str__(self):
         return f"{self.__class__.__name__}({self.message})"
@@ -25,48 +25,52 @@ class MErrorMissingSessionIdentity(MError):
     Exception raised when an SessionPair is missing a JSESSIONID.
     """
 
-    pass
-
 
 @attrs.define(slots=True, frozen=True)
 class MErrorTransport(MError):
     """A transport-layer failure."""
 
-    pass
+
+@attrs.define(slots=True, frozen=True)
+class MErrorMalformedResponse(MErrorTransport):
+    """The server responded with something undecodeable."""
 
 
 @attrs.define(slots=True, frozen=True)
-class MErrorSocketMalformedPayload(MErrorTransport):
-    """
-    Exception raised when the server responds with something undecodeable.
-    """
+class MErrorHttpInitialisation(MErrorTransport):
+    """The HTTP connection to BroadWorks could not be established."""
 
-    pass
+
+@attrs.define(slots=True, frozen=True)
+class MErrorHttpTimeout(MErrorTransport):
+    """The HTTP request to BroadWorks timed out."""
+
+
+@attrs.define(slots=True, frozen=True)
+class MErrorHttpDropped(MErrorTransport):
+    """The HTTP connection dropped mid-request."""
+
+
+@attrs.define(slots=True, frozen=True)
+class MErrorHttpStatus(MErrorTransport):
+    """BroadWorks returned a non-2xx HTTP status."""
+
+    status: int = attrs.field()
 
 
 @attrs.define(slots=True, frozen=True)
 class MErrorSocketInitialisation(MErrorTransport):
-    """
-    Exception raised when the TCP socket fails to initialise.
-    """
-
-    pass
+    """The TCP socket failed to initialise."""
 
 
 @attrs.define(slots=True, frozen=True)
 class MErrorSocketTimeout(MErrorTransport):
-    """
-    Exception raised when the TCP socket to broadworks times out.
-    """
-
-    pass
+    """The TCP socket's connection to Broadworks timed out."""
 
 
 @attrs.define(slots=True, frozen=True)
 class MErrorSocketDropped(MErrorTransport):
     """
-    Exception raised when Broadworks abruptly closes the socket
-    or dropped the connection while data was still being sent.
+    Broadworks abruptly closed the TCP socket or dropped the
+    connection while data was still being sent.
     """
-
-    pass

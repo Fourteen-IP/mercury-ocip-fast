@@ -5,7 +5,18 @@ from typing import Protocol, runtime_checkable
 
 
 @dataclass(frozen=True, slots=True)
+class SOAPSessionSettings:
+    """Timeouts for a SOAP session's httpx client, in seconds."""
+
+    connect_timeout: float = 30.0
+    read_timeout: float = 30.0
+    write_timeout: float = 30.0
+
+
+@dataclass(frozen=True, slots=True)
 class TCPSessionSettings:
+    """Timeouts and config for a TCP session"""
+
     connect_timeout: int = field(default=30)
     read_timeout: int = field(default=30)
     read_chunk_size: int = field(default=8192)
