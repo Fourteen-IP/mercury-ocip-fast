@@ -11,6 +11,7 @@ from typing import AsyncIterator, Awaitable, Callable
 import attr
 import httpx
 from zeep import AsyncClient, Settings
+from zeep.cache import InMemoryCache
 from zeep.transports import AsyncTransport
 
 from mercury_ocip_fast.exceptions import (
@@ -123,6 +124,8 @@ class SOAPSessionPool:
     _all_sessions: list[SOAPSession] = attr.ib(factory=list)
     _waiters: list[asyncio.Future[SOAPSession]] = attr.ib(factory=list)
     _closed: bool = attr.ib(default=False)
+    # All sessions on this host share one WSDL cache.
+    _wsdl_cache: InMemoryCache = attr.ib(factory=InMemoryCache)
 
     def __attrs_post_init__(self):
         # One in-flight request per session, so the semaphore matches pool_size.
@@ -160,7 +163,7 @@ class SOAPSessionPool:
         http_client = httpx.AsyncClient(
             limits=limits, timeout=timeout, verify=self.config.verify_ssl
         )
-        transport = AsyncTransport(client=http_client)
+        transport = AsyncTransport(client=http_client, cache=self._wsdl_cache)
         settings = Settings(strict=False, xml_huge_tree=True)  # type: ignore
 
         try:
