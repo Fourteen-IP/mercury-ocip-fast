@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 
 @attrs.define(kw_only=True, slots=True)
-class SOAPSessionAtom(SessionAtom):
+class SOAPSessionAtom:
     """A SOAP session for BroadWorks.
 
     The session owns its transport and its identity. The transport is an
@@ -51,9 +51,10 @@ class SOAPSessionAtom(SessionAtom):
     session_id: str = attrs.field(factory=lambda: str(uuid.uuid4()))
 
     @classmethod
-    def open(
+    async def open(
         cls,
         endpoint: str,
+        port: int | None = None,
         *,
         settings: SOAPSessionSettings,
         verify_ssl: bool = True,
@@ -91,7 +92,7 @@ class SOAPSessionAtom(SessionAtom):
         )
 
     @classmethod
-    def resume(
+    async def resume(
         cls,
         endpoint: str,
         pair: SessionPair,
@@ -114,7 +115,7 @@ class SOAPSessionAtom(SessionAtom):
         Returns:
             A SOAP session that uses the given pair.
         """
-        session = cls.open(endpoint, settings=settings, verify_ssl=verify_ssl)
+        session = await cls.open(endpoint, settings=settings, verify_ssl=verify_ssl)
         session.http_client.cookies.set("JSESSIONID", pair.jsessionid)
         session.session_id = pair.session_id
 

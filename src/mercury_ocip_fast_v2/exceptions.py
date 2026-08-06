@@ -27,6 +27,13 @@ class MErrorMissingSessionIdentity(MError):
 
 
 @attrs.define(slots=True, frozen=True)
+class MErrorLogin(MError):
+    """
+    A connection failed to log in.
+    """
+
+
+@attrs.define(slots=True, frozen=True)
 class MErrorTransport(MError):
     """A transport-layer failure."""
 

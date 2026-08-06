@@ -14,14 +14,14 @@ from mercury_ocip_fast_v2.exceptions import (
     MErrorSocketInitialisation,
     MErrorSocketTimeout,
 )
-from mercury_ocip_fast_v2.session.session import SessionAtom, TCPSessionSettings
+from mercury_ocip_fast_v2.session.session import TCPSessionSettings
 from mercury_ocip_fast_v2.utils.envelopes import build_broadsoft_envelope
 
 logger = logging.getLogger(__name__)
 
 
 @attrs.define(kw_only=True, slots=True)
-class TCPSessionAtom(SessionAtom):
+class TCPSessionAtom:
     """A TCP session for BroadWorks.
 
     The session owns its transport and its identity. The transport is an
@@ -49,7 +49,7 @@ class TCPSessionAtom(SessionAtom):
         port: int,
         *,
         settings: TCPSessionSettings,
-        ssl_verify: bool = True,
+        verify_ssl: bool = True,
     ) -> TCPSessionAtom:
         """Open a new TCP session. The session is not logged in.
 
@@ -69,7 +69,7 @@ class TCPSessionAtom(SessionAtom):
             MErrorSocketTimeout: If the connection does not open in time.
             MErrorSocketInitialisation: If the socket cannot open.
         """
-        ssl_context = ssl.create_default_context() if ssl_verify else None
+        ssl_context = ssl.create_default_context() if verify_ssl else None
 
         logger.debug(
             "Open a TCP session to %s:%d, connect timeout %ss",
