@@ -56,8 +56,8 @@ class Requester:
                 and returns the reply string.
 
         Returns:
-            A single parsed response, or a list of parsed responses when the
-            reply contains more than one command.
+            A single parsed response for a single payload, or a list of
+            parsed responses for a list payload.
 
         Raises:
             MErrorMalformedResponse: If the reply cannot be parsed or has an
@@ -71,7 +71,12 @@ class Requester:
             len(response),
             session.session_id,
         )
-        return self.parse_response(response, response_type)
+        parsed = self.parse_response(response, response_type)
+
+        if isinstance(payload, list) and not isinstance(parsed, list):
+            return [parsed]
+
+        return parsed
 
     def parse_response(self, payload: str, response_type: type[R]) -> R | list[R]:
         """Parse an OCI reply string into typed response object(s).

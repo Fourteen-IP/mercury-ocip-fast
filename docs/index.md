@@ -1,8 +1,8 @@
 # mercury-ocip-fast
 
-mercury-ocip-fast is a counterpart to [mercury-ocip](https://github.com/Fourteen-IP/mercury-ocip), built for high-volume production workloads. It's significantly faster through connection pooling and async concurrency, making it suitable for backend services and bulk operations.
+mercury-ocip-fast is a counterpart to [mercury-ocip](https://github.com/Fourteen-IP/mercury-ocip). It is built for high-volume production workloads. It is faster because it uses session pooling and async concurrency. This makes it good for backend services and bulk operations.
 
-Where mercury-ocip excels at scripting and automation, mercury-ocip-fast is designed for stability and throughput when you need to handle thousands of requests.
+mercury-ocip is good for scripting and automation. mercury-ocip-fast is for stability and throughput when you must handle many requests.
 
 ## Installation
 
@@ -10,292 +10,348 @@ Where mercury-ocip excels at scripting and automation, mercury-ocip-fast is desi
 pip install mercury-ocip-fast
 ```
 
-## Basic usage
+## Public API
+
+Import these names from the top-level package:
 
 ```python
-from mercury_ocip_fast import Client
-from mercury_ocip_fast.commands.commands import UserGetRequest21sp1
+from mercury_ocip_fast import (
+    Client,
+    SessionClient,
+    SessionPoolSettings,
+    SOAPSessionAtom,
+    SOAPSessionSettings,
+    TCPSessionAtom,
+    TCPSessionSettings,
+)
+```
+
+You choose the transport with the `atom_type` argument. Pass `TCPSessionAtom` for raw TCP. Pass `SOAPSessionAtom` for SOAP over HTTP or HTTPS. There is no `conn_type` string.
+
+## Basic usage (TCP)
+
+The `Client` opens a pool of sessions. It logs in each session as the user. It sends commands over the pool. Use the client in an `async with` block.
+
+```python
+from mercury_ocip_fast import Client, SessionPoolSettings, TCPSessionAtom, TCPSessionSettings
+from mercury_ocip_fast.commands.commands import UserGetRequest23V2, UserGetResponse23V2
 
 async with Client(
     host="your-broadworks.server",
     username="admin",
-    password="your-password"
+    password="your-password",
+    atom_type=TCPSessionAtom,
+    session_config=TCPSessionSettings(),
+    pool_config=SessionPoolSettings(),
 ) as client:
     response = await client.command(
-        UserGetRequest21sp1(user_id="user@domain.com")
+        UserGetRequest23V2(user_id="user@domain.com"),
+        response_type=UserGetResponse23V2,
     )
-
     print(response.first_name)
 ```
 
-The client handles authentication automatically. It speaks both transports BroadWorks exposes: raw TCP (the default) and SOAP, over TLS or plain connections. See [SOAP transport](#soap-transport) for the SOAP-specific bits.
+The client needs an async setup step before use. The `async with` block does this setup. To keep a client without an `async with` block, make it with `await Client.create(...)`, then call `await client.close()` when your work is complete.
 
-## Bulk operations
+The `host`, `username`, `password`, `atom_type`, `session_config`, and `pool_config` arguments are required. The `port` and `tls` arguments are optional. The `tls` argument is `True` by default.
 
-Pass a list of commands to execute them concurrently:
+## Basic usage (SOAP)
+
+For SOAP, pass `atom_type=SOAPSessionAtom` and `session_config=SOAPSessionSettings(...)`. Give the full SOAP endpoint URL as the host (no `?wsdl` suffix):
 
 ```python
-from mercury_ocip_fast import Client
-from mercury_ocip_fast.commands.commands import UserGetRequest21sp1
+from mercury_ocip_fast import Client, SessionPoolSettings, SOAPSessionAtom, SOAPSessionSettings
+from mercury_ocip_fast.commands.commands import UserGetRequest23V2, UserGetResponse23V2
+
+async with Client(
+    host="https://your-broadworks.server/webservice/services/ProvisioningService",
+    username="admin",
+    password="your-password",
+    atom_type=SOAPSessionAtom,
+    session_config=SOAPSessionSettings(),
+    pool_config=SessionPoolSettings(),
+) as client:
+    response = await client.command(
+        UserGetRequest23V2(user_id="user@domain.com"),
+        response_type=UserGetResponse23V2,
+    )
+    print(response.first_name)
+```
+
+Everything else works the same over both transports. Single commands, batches, and error handling do not change. So your command code moves between the two transports without a change.
+
+### The `response_type` argument
+
+The `response_type` keyword tells the parser which class to build. If you give it, the result has that type. If you leave it out, the result has the base `OCIResponse` type.
+
+```python
+# Typed as UserGetResponse23V2:
+response = await client.command(request, response_type=UserGetResponse23V2)
+
+# Typed as the base OCIResponse:
+response = await client.command(request)
+```
+
+## Batch operations
+
+Pass a list of commands to send a batch:
+
+```python
+from mercury_ocip_fast import Client, SessionPoolSettings, TCPSessionAtom, TCPSessionSettings
+from mercury_ocip_fast.commands.commands import UserGetRequest23V2, UserGetResponse23V2
 
 async with Client(
     host="your-broadworks.server",
     username="admin",
-    password="your-password"
+    password="your-password",
+    atom_type=TCPSessionAtom,
+    session_config=TCPSessionSettings(),
+    pool_config=SessionPoolSettings(),
 ) as client:
     users = ["user1@domain.com", "user2@domain.com", "user3@domain.com"]
 
-    responses = await client.command([
-        UserGetRequest21sp1(user_id=user) for user in users
-    ])
+    responses = await client.command(
+        [UserGetRequest23V2(user_id=user) for user in users],
+        response_type=UserGetResponse23V2,
+    )
 
     for response in responses:
         print(f"{response.user_id}: {response.first_name}")
 ```
 
-Commands are batched into groups of 15 per the OCI-P spec and sent concurrently across the connection pool. Responses are returned in the same order as the input commands.
+The client splits the list into groups of 15, per the OCI-P spec. One `command()` call acquires one session from the pool. It sends the groups over that one session, one after the other. It does not spread a single call across many sessions. The responses come back in the same order as the input commands.
 
-## Connection warming
-
-Pre-create connections to avoid cold-start latency on bulk operations:
-
-```python
-async with Client(
-    host="your-broadworks.server",
-    username="admin",
-    password="your-password"
-) as client:
-    await client.warm(50)  # Create 50 connections upfront
-
-    responses = await client.command([...])
-```
-
-`warm()` works for both transports. On TCP it opens connections; on SOAP it opens and logs in sessions (see below). Warming matters more for SOAP, because sessions are otherwise created lazily one at a time, and each one fetches the WSDL and logs in before it can be used.
+To run many calls at the same time, start several `command()` calls together (for example with `asyncio.gather`). Each call takes its own session from the pool, so the calls run in parallel up to the pool size.
 
 ## Pool configuration
 
-The connection pool can be configured for your specific workload:
+`SessionPoolSettings` sets the size and the wait times of the pool:
 
 ```python
-from mercury_ocip_fast import Client
-from mercury_ocip_fast.pool import PoolConfig
+from mercury_ocip_fast import Client, SessionPoolSettings, TCPSessionAtom, TCPSessionSettings
 
-config = PoolConfig(
-    max_connections=50,           # Max TCP connections to maintain
-    max_concurrent_requests=100,  # Max in-flight requests at once
-    connect_timeout=10.0,         # Timeout for establishing connection
-    read_timeout=30.0,            # Timeout for reading response
-    max_connection_age=300.0,     # Recycle connections after 5 minutes
-    idle_timeout=60.0,            # Close idle connections after 1 minute
+pool_config = SessionPoolSettings(
+    max_size=5,             # Maximum number of sessions in the pool.
+    acquire_timeout=10.0,   # Seconds to wait to acquire a session.
+    wait_timeout=10.0,      # Seconds to wait for a free session.
 )
 
 async with Client(
     host="your-broadworks.server",
     username="admin",
     password="your-password",
-    config=config
+    atom_type=TCPSessionAtom,
+    session_config=TCPSessionSettings(),
+    pool_config=pool_config,
 ) as client:
-    pass
+    ...
 ```
 
-Start with conservative values and adjust based on your BroadWorks cluster capacity.
+`max_size` is the number of sessions the pool holds. It is also the limit on how many `command()` calls can run at the same time, because each call takes one session. Raise it to send more in parallel, within what your BroadWorks cluster can take. The values above are the defaults.
 
-## SOAP transport
+## Session configuration
 
-Set `conn_type="SOAP"` and pass the full SOAP endpoint URL as the host (no `?wsdl` suffix):
+The session config sets the timeouts for each session's transport. Use `TCPSessionSettings` for TCP and `SOAPSessionSettings` for SOAP.
+
+`TCPSessionSettings` fields:
 
 ```python
-from mercury_ocip_fast import Client
-from mercury_ocip_fast.commands.commands import UserGetRequest21sp1
+from mercury_ocip_fast import TCPSessionSettings
 
-async with Client(
-    host="https://your-broadworks.server/webservice/services/ProvisioningService",
-    username="admin",
-    password="your-password",
-    conn_type="SOAP",
-) as client:
-    response = await client.command(UserGetRequest21sp1(user_id="user@domain.com"))
-    print(response.first_name)
+session_config = TCPSessionSettings(
+    connect_timeout=30,     # Seconds to wait for the socket to open.
+    read_timeout=30,        # Seconds to wait for a reply.
+    read_chunk_size=8192,   # Bytes to read from the socket at a time.
+    max_ttl_seconds=900,    # Session lifetime before it is stale.
+)
 ```
 
-Everything else (single commands, bulk lists, response handling) works exactly as it does over TCP, so code is portable between the two transports.
+`SOAPSessionSettings` fields:
+
+```python
+from mercury_ocip_fast import SOAPSessionSettings
+
+session_config = SOAPSessionSettings(
+    connect_timeout=30.0,   # Seconds to wait for the HTTP connection.
+    read_timeout=30.0,      # Seconds to wait for the HTTP reply.
+    write_timeout=30.0,     # Seconds to wait to send the request.
+    max_ttl_seconds=900,    # Session lifetime before it is stale.
+)
+```
+
+Both classes take keyword arguments only. The values above are the defaults.
 
 ### How SOAP pooling works
 
-BroadWorks ties an OCI-P login to the HTTP session (its `JSESSIONID` cookie), not to the session id in the request body. So instead of one shared SOAP client, mercury-ocip-fast keeps a pool of independently logged-in **sessions**, each with its own HTTP client, its own cookie jar, and its own session id. This is the SOAP equivalent of the TCP connection pool: each session handles one request at a time, and requests fan out across the pool.
+BroadWorks ties an OCI-P login to the HTTP session (its `JSESSIONID` cookie), not to the session id in the request body. So mercury-ocip-fast does not share one SOAP client. Instead the pool holds several sessions that each log in on their own. Each session has its own httpx client, its own cookie jar, and its own session id. This is the SOAP form of the TCP session pool. Each session handles one request at a time. Different sessions run in parallel.
 
-Because each session logs in once and is reused, you get several authenticated sessions running concurrently rather than serialising everything through a single login.
-
-### SOAP configuration
-
-Use `SOAPPoolConfig` to size the session pool:
-
-```python
-from mercury_ocip_fast import Client
-from mercury_ocip_fast.pool import SOAPPoolConfig
-
-config = SOAPPoolConfig(
-    pool_size=8,            # Number of logged-in sessions (also the concurrency limit)
-    acquire_timeout=30.0,   # How long to wait for a free session
-    max_session_age=300.0,  # Re-authenticate sessions after 5 minutes
-    idle_timeout=60.0,      # Close sessions idle longer than this
-    verify_ssl=True,        # Verify the server's TLS certificate
-)
-
-async with Client(
-    host="https://your-broadworks.server/webservice/services/ProvisioningService",
-    username="admin",
-    password="your-password",
-    conn_type="SOAP",
-    config=config,
-) as client:
-    await client.warm()  # Open and log in all 8 sessions up front
-    responses = await client.command([...])
-```
-
-`pool_size` is both the number of sessions and the maximum number of requests in flight at once, since a session serves one request at a time. Raise it to send more in parallel, within what your BroadWorks cluster can take.
+Each session logs in one time and then serves many requests. So you get several authenticated sessions that run at the same time, not one login for everything.
 
 ## TLS and non-TLS
 
-The default is TLS on port 2209:
+The `tls` argument is `True` by default. The TCP default port is 2209.
 
 ```python
+# TLS on, TCP, default port 2209:
 async with Client(
     host="your-broadworks.server",
     username="admin",
-    password="your-password"
+    password="your-password",
+    atom_type=TCPSessionAtom,
+    session_config=TCPSessionSettings(),
+    pool_config=SessionPoolSettings(),
 ) as client:
-    pass
+    ...
 ```
 
-For non-TLS connections on port 2208:
+For a plain TCP link, set `tls=False`. The port stays 2209 unless you set `port` yourself, so pass the plaintext port (usually 2208):
 
 ```python
+# TLS off, TCP, plaintext port 2208:
 async with Client(
     host="your-broadworks.server",
     port=2208,
     username="admin",
     password="your-password",
-    tls=False
+    atom_type=TCPSessionAtom,
+    session_config=TCPSessionSettings(),
+    pool_config=SessionPoolSettings(),
+    tls=False,
 ) as client:
-    pass
+    ...
 ```
 
-The login flow adjusts automatically based on the `tls` setting:
+The `tls` argument selects the login flow:
 
-- **TLS on:** a single `LoginRequest22V5`. On TCP the socket is wrapped in SSL; on SOAP the endpoint is HTTPS. Either way the channel is encrypted, so the password is sent directly.
-- **TLS off:** the two-step flow, an `AuthenticationRequest` for a nonce followed by a hashed `LoginRequest14sp4`, so the password never travels in plaintext.
+- **TLS on:** the client uses the plain-text login. The link is encrypted, so the password is safe to send directly.
+- **TLS off:** the client uses the encrypted login. The password is hashed, so it never travels in plaintext.
 
-For SOAP, whether the connection is HTTP or HTTPS follows the host URL you pass; the `tls` flag only selects which login flow is used.
-
-## Monitoring the pool
-
-`pool_stats` reports how busy the pool is, and `session_ids` lists the session id of every connection or session currently open:
-
-```python
-async with Client(host=..., username=..., password=..., conn_type="SOAP") as client:
-    await client.warm()
-
-    print(client.pool_stats)
-    # {'total_sessions': 8, 'available': 8, 'in_use': 0, 'waiting': 0, 'pool_size': 8}
-
-    print(client.session_ids)
-    # ['7c61848c-...', '83ee21b1-...', ...]
-```
-
-`session_ids` only reflects what has actually been opened, so call `warm()` first if you want the whole pool listed. Treat the ids as secrets.
+For TCP, `tls` also turns the socket TLS on or off and controls certificate checks. For SOAP, whether the connection is HTTP or HTTPS follows the host URL you pass. The `tls` flag selects the login flow and controls the httpx certificate check.
 
 ## Response handling
 
-Responses are parsed into Python objects:
+The library raises on a server error. It does not return an error object. When the server returns an `ErrorResponse`, the requester raises `MErrorResponse`. Catch it with `try`/`except`:
 
 ```python
-from mercury_ocip_fast.commands.base_command import ErrorResponse
+from mercury_ocip_fast.exceptions import MErrorResponse
 
-response = await client.command(some_command)
-
-if isinstance(response, ErrorResponse):
-    print(f"Error {response.error_code}: {response.summary}")
-else:
+try:
+    response = await client.command(some_command, response_type=UserGetResponse23V2)
     print(response.user_id)
+except MErrorResponse as error:
+    print(f"The server returned an error: {error.message}")
 ```
 
-For bulk operations, responses maintain the same order as the input commands:
+`MErrorResponse` is a subclass of `MError`, the base exception of the library. Its `message` field holds the error summary from the server.
+
+For a batch, the responses stay in the same order as the input commands. If any command in the batch fails, the requester raises `MErrorResponse` for the batch:
 
 ```python
 commands = [cmd1, cmd2, cmd3]
-responses = await client.command(commands)
-
-for cmd, resp in zip(commands, responses):
-    # Process each pair
-    pass
+try:
+    responses = await client.command(commands, response_type=UserGetResponse23V2)
+    for command, response in zip(commands, responses):
+        ...  # Process each pair.
+except MErrorResponse as error:
+    print(f"A command in the batch failed: {error.message}")
 ```
+
+## SessionClient: multi-tenant sessions
+
+`SessionClient` is a different entry point. It keeps no identity and no session list. You open a session for a user, you send commands over it, and you close it yourself. You can also export a session and resume it later. This is good for a service that acts for many users.
+
+`SessionClient` works with SOAP only. Only a SOAP session can resume a login, so `atom_type` must be `SOAPSessionAtom`.
+
+```python
+from mercury_ocip_fast import SessionClient, SOAPSessionAtom, SOAPSessionSettings
+from mercury_ocip_fast.commands.commands import UserGetRequest23V2, UserGetResponse23V2
+
+async with SessionClient(
+    host="https://your-broadworks.server/webservice/services/ProvisioningService",
+    atom_type=SOAPSessionAtom,
+    session_config=SOAPSessionSettings(),
+) as client:
+    # Open a session, logged in as the user.
+    session = await client.open("user_admin", "user_password")
+    try:
+        response = await client.command(
+            session,
+            UserGetRequest23V2(user_id="user@domain.com"),
+            response_type=UserGetResponse23V2,
+        )
+        print(response.first_name)
+    finally:
+        # You own the session. Close it when your work is complete.
+        await client.close(session)
+```
+
+The `SessionClient` does not take `username` or `password`. You give the credentials to `open()` for each user. It also does not take a `pool_config`, because it does not hold a pool.
+
+`client.command(session, request, ...)` takes the session as its first argument. It works like `Client.command`. It sends a single command or a batch. It splits a batch into groups of 15 and sends them over the session, one after the other. It takes the same `response_type` keyword.
+
+### Export and resume a session
+
+Each session has a `pair` property. This is a `SessionPair` value. It holds the JSESSIONID cookie and the OCI-P session id. Store the pair to resume the session later. Treat the pair as a secret. A person who holds the pair can send commands as the user.
+
+```python
+# Export the identity of an open session.
+pair = session.pair
+
+# ... store the pair, for example between requests or after a restart ...
+
+# Resume the session later, with no new login.
+resumed = await client.resume(pair)
+try:
+    response = await client.command(
+        resumed,
+        UserGetRequest23V2(user_id="user@domain.com"),
+        response_type=UserGetResponse23V2,
+    )
+finally:
+    await client.close(resumed)
+```
+
+`session.pair` raises `MErrorMissingSessionIdentity` if the session has no login yet.
+
+To keep a `SessionClient` without an `async with` block, make it with `await SessionClient.create(...)`. The client owns no sessions, so it has nothing of its own to close. You still must close each session that you open.
 
 ## Use cases
 
 mercury-ocip is better for:
+
 - Scripts and automation
 - Interactive CLI tools
 - General purpose work
 
 mercury-ocip-fast is better for:
+
 - Backend APIs and services
 - Bulk data migrations
 - High-volume reporting
-- Production workloads requiring stability and throughput
+- Production workloads that need stability and throughput
 
-Both libraries use identical OCI-P command definitions, so code is portable between them.
+Both libraries use the same OCI-P command definitions. So command code moves between them.
 
 ## Performance notes
 
-This library can generate significant traffic quickly. BroadWorks clusters not sized for the load may experience impact. Consider:
+This library can make a lot of traffic quickly. A BroadWorks cluster that is not sized for the load can feel the impact. Consider these steps:
 
-- Starting with lower concurrency settings
-- Monitoring cluster performance during bulk operations
-- Using connection warming selectively
-- Rate limiting if necessary
-
-## Example: Bulk user fetch
-
-```python
-import asyncio
-from mercury_ocip_fast import Client
-from mercury_ocip_fast.commands import (
-    GroupGetRequest,
-    UserGetRequest21sp1
-)
-
-async def get_all_group_users(group_id: str):
-    async with Client(
-        host="broadworks.example.com",
-        username="admin",
-        password="secret"
-    ) as client:
-        group = await client.command(
-            GroupGetRequest(service_provider_id="ent1", group_id=group_id)
-        )
-
-        await client.warm(min(50, len(group.user_ids) // 20))
-
-        responses = await client.command([
-            UserGetRequest21sp1(user_id=uid) for uid in group.user_ids
-        ])
-
-        return responses
-
-users = asyncio.run(get_all_group_users("sales-team"))
-```
+- Start with a small `max_size`.
+- Watch the cluster while a batch runs.
+- Add rate limits if you need them.
 
 ## API Reference
 
-See the [Commands Reference](/commands/) for available OCI-P commands.
+See the [Commands Reference](/commands/) for the OCI-P commands.
 
-### Client
+### Clients
 
 ::: mercury_ocip_fast.client
 
-### Pool configuration and transport pools
+::: mercury_ocip_fast.session_client
 
-::: mercury_ocip_fast.pool
+### Sessions
 
-::: mercury_ocip_fast.soap_pool
+::: mercury_ocip_fast.session.soap_session
+
+::: mercury_ocip_fast.session.tcp_session

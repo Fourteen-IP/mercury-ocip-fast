@@ -192,7 +192,9 @@ class Client[S: (TCPSessionSettings, SOAPSessionSettings)]:
                     response_type=parse_as,
                     session=atom,
                 )
-                all_results.extend(result)
+
+                if isinstance(result, list):
+                    all_results.extend(result)
 
             return all_results
 

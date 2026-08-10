@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mercury-ocip-fast"
-version = "v2.1.0"
+version = "v3.0.0"
 description = "Asynchronous Python SDK for BroadWorks OCI (Open Client Interface) API"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -56,6 +56,7 @@ dependencies = [
 testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
 pythonpath = ["src"]
+asyncio_mode = "auto"
 addopts = "-ra -q"
 filterwarnings = ["ignore::DeprecationWarning", "ignore::UserWarning"]
 
