@@ -137,7 +137,7 @@ class Requester:
         type_name = type_name.split(":", 1)[-1]
 
         if type_name == "ErrorResponse":
-            summary = ErrorResponse.from_dict(payload).summaryEnglish
+            summary = ErrorResponse.from_dict(payload).summary or "No Summary"
             logger.warning("Received ErrorResponse from server: %s", summary)
             raise MErrorResponse(summary)
 

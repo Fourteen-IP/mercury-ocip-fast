@@ -49,8 +49,7 @@ keywords = [
 dependencies = [
     "attrs>=21.4.0",
     "httpx>=0.28.0",
-    "xmltodict>=1.0.2",
-    "zeep[async]>=4.2.0",
+    "xmltodict>=1.0.2"
 ]
 
 [tool.pytest.ini_options]

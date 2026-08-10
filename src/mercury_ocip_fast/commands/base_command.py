@@ -1,22 +1,21 @@
-from dataclasses import dataclass, fields, is_dataclass
-from typing import Any, Generic, Optional, Self, TypeVar, get_type_hints
+from dataclasses import dataclass, field, fields, is_dataclass
+from typing import Any, Self, get_type_hints
 
 from mercury_ocip_fast.utils.defines import to_snake_case
 from mercury_ocip_fast.utils.parser import Parser
-from mercury_ocip_fast.exceptions import MErrorMalformedResponse, MErrorResponse
 
 
 class OCIType:
     """
-    Base Class For Broadworks Types
+    Base class for BroadWorks types.
 
-    method_table:
+    Method table:
 
-    - __init__: Handles dataclass default initialisation of raw objects
-    - to_dict: Invokes Parser to_dict_from_class
-    - to_xml: Invokes Parser to_xml_from_class
-    - from_dict: Invokes Parser to_class_from_dict
-    - from_xml: Invokes Parser to_class_from_xml
+    - __init__: sets declared fields from keyword arguments, defaulting the rest to None
+    - to_dict: invokes Parser.to_dict_from_class
+    - to_xml: invokes Parser.to_xml_from_class
+    - from_dict: invokes Parser.to_class_from_dict
+    - from_xml: invokes Parser.to_class_from_xml
     """
 
     namespace = "C"
@@ -32,10 +31,7 @@ class OCIType:
             if not hasattr(self, key):
                 setattr(self, key, None)
 
-    def get_field_aliases(self):
-        # fields() requires a dataclass type/instance. Some generated BWKS types
-        # may be dataclasses; if not, return an empty mapping to satisfy the
-        # type-checker and runtime.
+    def get_field_aliases(self) -> dict[str, str]:
         cls = self.__class__
         if not is_dataclass(cls):
             return {}
@@ -56,18 +52,10 @@ class OCIType:
         return Parser.to_class_from_xml(xml, cls)
 
 
-# Bound to OCIDataResponse (defined below); the response type a given request
-# expects back. Lets command()/authenticate() return T instead of the bare
-# CommandResult union when the caller's request is typed as OCIRequest[T].
-TResponse = TypeVar("TResponse", bound="OCIDataResponse")
-
-
 class OCICommand(OCIType):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    pass
 
 
-T = TypeVar("T")
 type Nillable[T] = T
 
 
@@ -76,7 +64,7 @@ class OCINil:
     pass
 
 
-class OCIRequest(OCICommand, Generic[TResponse]):
+class OCIRequest[TResponse: OCIDataResponse](OCICommand):
     pass
 
 
@@ -96,18 +84,11 @@ class SuccessResponse(OCIResponse):
 class OCITableRow:
     col: list[str]
 
-    def __init__(self, col):
-        self.col = col
-
 
 @dataclass
 class OCITable:
     col_heading: list[str]
-    row: list[OCITableRow]
-
-    def __init__(self, col_heading, row=None):
-        self.col_heading = col_heading
-        self.row = row if row is not None else []
+    row: list[OCITableRow] = field(default_factory=list)
 
     def to_dict(self):
         return [
@@ -119,8 +100,11 @@ class OCITable:
         ]
 
 
+@dataclass(kw_only=True)
 class ErrorResponse(OCIResponse):
-    errorCode: Optional[int] = None
-    summary: str
-    summaryEnglish: str
-    detail: Optional[str] = None
+    error_code: int | None = field(default=None, metadata={"alias": "errorCode"})
+    summary: str | None = field(default=None, metadata={"alias": "summary"})
+    summary_english: str | None = field(
+        default=None, metadata={"alias": "summaryEnglish"}
+    )
+    detail: str | None = field(default=None, metadata={"alias": "detail"})

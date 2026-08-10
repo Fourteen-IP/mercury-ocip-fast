@@ -207,14 +207,11 @@ class TCPSessionAtom:
 
         The method is safe to call more than once.
         """
+        self.writer.close()
         try:
-            self.writer.close()
-            await self.writer.wait_closed()
-        except Exception as e:  # noqa: BLE001
-            logger.warning(
-                "The connection raised an exception while closing: %s",
-                e,
-            )
+            await asyncio.wait_for(self.writer.wait_closed(), timeout=1.0)
+        except (TimeoutError, Exception) as e:  # noqa: BLE001
+            logger.debug("TLS close did not finish cleanly (harmless): %s", e)
 
     def is_alive(self) -> bool:
         """Tell if the session is still connected.

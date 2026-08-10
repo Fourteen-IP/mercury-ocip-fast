@@ -1,10 +1,7 @@
 from dataclasses import fields, is_dataclass
 from typing import (
     Any,
-    Dict,
-    List,
     Protocol,
-    Type,
     TypeVar,
     Union,
     cast,
@@ -25,12 +22,12 @@ T = TypeVar("T")
 class HasFieldAliases(Protocol):
     """Protocol for objects that have field aliases."""
 
-    def get_field_aliases(self) -> Dict[str, str]: ...
+    def get_field_aliases(self) -> dict[str, str]: ...
 
 
 class Parser:
     """
-    Base Class For OCI Object Parsing & Type Translation using xmltodict
+    Base Class For OCI Object Parsing & type Translation using xmltodict
 
     method table:
 
@@ -45,11 +42,11 @@ class Parser:
     @staticmethod
     def to_xml_from_class(obj: object) -> str:
         """Convert a class instance to XML string."""
-        aliases: Dict[str, str] = {}
+        aliases: dict[str, str] = {}
         if isinstance(obj, HasFieldAliases):
             aliases = obj.get_field_aliases()
 
-        root_content: Dict[str, Any] = {
+        root_content: dict[str, Any] = {
             "@xmlns": "",
             "@xsi:type": obj.__class__.__name__,
         }
@@ -73,9 +70,9 @@ class Parser:
             key = aliases.get(attr, snake_to_camel(attr))
 
             def _convert_with_aliases(
-                dct: Dict[str, Any], aliases_map: Dict[str, str] | None
-            ) -> Dict[str, Any]:
-                new_d: Dict[str, Any] = {}
+                dct: dict[str, Any], aliases_map: dict[str, str] | None
+            ) -> dict[str, Any]:
+                new_d: dict[str, Any] = {}
                 for k, v in dct.items():
                     if aliases_map and k in aliases_map:
                         new_k = aliases_map[k]
@@ -87,16 +84,16 @@ class Parser:
             # resolve declared subtype for lists/optionals to aid xsi:type emission
             _origin = getattr(hint, "__origin__", None)
             _args = get_args(hint)
-            _declared_subtype = _args[0] if _origin in (list, List) and _args else None
+            _declared_subtype = _args[0] if _origin in (list, list) and _args else None
 
             def serialize_obj_with_aliases(
                 o: object, declared_hint: Any | None = None
-            ) -> Dict[str, Any]:
+            ) -> dict[str, Any]:
                 """Serialize an object to a dict while applying its field aliases recursively."""
-                aliases_map: Dict[str, str] = {}
+                aliases_map: dict[str, str] = {}
                 get_aliases = getattr(o, "get_field_aliases", None)
                 if callable(get_aliases):
-                    aliases_map = cast(Dict[str, str], get_aliases())
+                    aliases_map = cast(dict[str, str], get_aliases())
 
                 # Start from the generic dict conversion, then replace nested objects/lists
                 attrs = Parser.to_dict_from_class(o, wrap_in_class_name=False)
@@ -118,11 +115,11 @@ class Parser:
                         _a_args = get_args(h)
                         _a_subtype = (
                             _a_args[0]
-                            if _a_origin in (list, List) and _a_args
+                            if _a_origin in (list, list) and _a_args
                             else None
                         )
 
-                        new_list: List[Any] = []
+                        new_list: list[Any] = []
                         for it in raw_val:
                             if hasattr(it, "__dict__"):
                                 new_list.append(
@@ -165,10 +162,10 @@ class Parser:
                         # If list item is an object, convert it to dict first
                         if hasattr(i, "__dict__"):
                             # If the item exposes field aliases, use them when converting
-                            item_aliases: Dict[str, str] = {}
+                            item_aliases: dict[str, str] = {}
                             get_aliases = getattr(i, "get_field_aliases", None)
                             if callable(get_aliases):
-                                item_aliases = cast(Dict[str, str], get_aliases())
+                                item_aliases = cast(dict[str, str], get_aliases())
                             result_list.append(
                                 _convert_with_aliases(
                                     Parser.to_dict_from_class(i), item_aliases
@@ -194,7 +191,7 @@ class Parser:
 
                 if is_table and key.endswith("Table"):
                     # This is a table structure
-                    table_dict: Dict[str, Any] = {}
+                    table_dict: dict[str, Any] = {}
 
                     # Add column headings (from dict keys)
                     table_dict["colHeading"] = list(first_keys)
@@ -214,7 +211,7 @@ class Parser:
                 # Originally, there was no implementation to query a list member to extract potential field aliases leading to the snake_to_camel fallback
                 origin = getattr(hint, "__origin__", None)
                 args = get_args(hint)
-                subtype = args[0] if origin in (list, List) and args else None
+                subtype = args[0] if origin in (list, list) and args else None
                 subtype_aliases = None
                 if subtype is not None and is_dataclass(subtype):
                     subtype_aliases = {
@@ -238,7 +235,7 @@ class Parser:
                 if not value:  # empty list
                     continue
 
-                processed_list: List[Any] = []
+                processed_list: list[Any] = []
                 for item in value:
                     if hasattr(item, "__dict__"):
                         # Serialize object recursively with its own aliases
@@ -274,7 +271,7 @@ class Parser:
         return output
 
     @staticmethod
-    def to_xml_from_dict(data: Dict[str, Any], cls: Type[OCIType]) -> str:
+    def to_xml_from_dict(data: dict[str, Any], cls: type[OCIType]) -> str:
         """Convert a dictionary to XML via class instance."""
         obj = Parser.to_class_from_dict(data, cls)
         return Parser.to_xml_from_class(obj)
@@ -283,7 +280,7 @@ class Parser:
     def to_dict_from_class(
         obj: object,
         wrap_in_class_name: bool = False,  # Changed default to False
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Convert a class instance to a dictionary.
 
         Args:
@@ -291,7 +288,7 @@ class Parser:
             wrap_in_class_name: If True, wraps the result in {ClassName: attributes}.
                                If False (default), returns just the attributes dict.
         """
-        attributes: Dict[str, Any] = {}
+        attributes: dict[str, Any] = {}
         type_hints = get_type_hints(obj.__class__)
 
         for attr, hint in type_hints.items():
@@ -332,7 +329,7 @@ class Parser:
         return attributes
 
     @staticmethod
-    def to_dict_from_xml(xml: str) -> Dict[str, Any]:
+    def to_dict_from_xml(xml: str) -> dict[str, Any]:
         """Parse XML string to dictionary."""
         if not isinstance(xml, str):
             return {}
@@ -344,7 +341,7 @@ class Parser:
         root_key = str(next(iter(parsed.keys())))
         root_val = parsed[root_key]
 
-        return cast(Dict[str, Any], Parser._process_dict_item(root_key, root_val))
+        return cast(dict[str, Any], Parser._process_dict_item(root_key, root_val))
 
     @staticmethod
     def _process_dict_item(key: str, value: Any) -> Any:
@@ -366,7 +363,7 @@ class Parser:
             if not isinstance(rows_data, list):
                 rows_data = [rows_data]
 
-            rows: List[OCITableRow] = []
+            rows: list[OCITableRow] = []
             for r in rows_data:
                 cols = r.get("col", [])
                 if not isinstance(cols, list):
@@ -380,8 +377,8 @@ class Parser:
             if "#text" in value:
                 return value["#text"]
 
-            new_val: Dict[str, Any] = {}
-            attributes: Dict[str, Any] = {}
+            new_val: dict[str, Any] = {}
+            attributes: dict[str, Any] = {}
 
             for k, v in value.items():
                 if k.startswith("@"):
@@ -415,7 +412,7 @@ class Parser:
         return value
 
     @staticmethod
-    def to_class_from_dict(data: Dict[str, Any], cls: Type[OCIType]) -> OCIType:
+    def to_class_from_dict(data: dict[str, Any], cls: type[OCIType]) -> OCIType:
         """Convert a dictionary to a class instance."""
         type_hints = get_type_hints(cls)
 
@@ -442,11 +439,11 @@ class Parser:
                 )
             source = command_data
 
-        snake_case_source: Dict[str, Any] = {
+        snake_case_source: dict[str, Any] = {
             to_snake_case(k): v for k, v in source.items()
         }
 
-        init_args: Dict[str, Any] = {}
+        init_args: dict[str, Any] = {}
 
         for key, hint in type_hints.items():
             if key not in snake_case_source:
@@ -465,13 +462,13 @@ class Parser:
                     args = get_args(hint)
 
             # Handle Nillable[T]
-            while origin is not None and origin not in (list, List) and args:
+            while origin is not None and origin not in (list, list) and args:
                 hint = args[0]
                 origin = getattr(hint, "__origin__", None)
                 args = get_args(hint)
 
-            # Handle List types
-            if origin in (list, List):
+            # Handle list types
+            if origin in (list, list):
                 if not args:
                     init_args[key] = val if isinstance(val, list) else [val]
                     continue
@@ -504,6 +501,6 @@ class Parser:
         return cls(**init_args)
 
     @staticmethod
-    def to_class_from_xml(xml: str, cls: Type[OCIType]) -> OCIType:
+    def to_class_from_xml(xml: str, cls: type[OCIType]) -> OCIType:
         """Parse XML string and convert to class instance."""
         return Parser.to_class_from_dict(Parser.to_dict_from_xml(xml), cls)

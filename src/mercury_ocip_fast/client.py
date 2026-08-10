@@ -1,4 +1,5 @@
 import logging
+from itertools import batched
 from typing import Self, overload
 
 import attrs
@@ -175,6 +176,7 @@ class Client[S: (TCPSessionSettings, SOAPSessionSettings)]:
             The parsed response, or a list of responses for a batch.
         """
         parse_as: type[OCIResponse] = response_type or OCIResponse
+        all_results: list[OCIResponse] = []
 
         async with self._pool.session() as atom:
             if isinstance(request, OCIRequest):
@@ -183,11 +185,16 @@ class Client[S: (TCPSessionSettings, SOAPSessionSettings)]:
                     response_type=parse_as,
                     session=atom,
                 )
-            return await self._requester.send(
-                payload=[r.to_xml() for r in request],
-                response_type=parse_as,
-                session=atom,
-            )
+
+            for batch in batched(request, 15):
+                result = await self._requester.send(
+                    payload=[b.to_xml() for b in batch],
+                    response_type=parse_as,
+                    session=atom,
+                )
+                all_results.extend(result)
+
+            return all_results
 
     async def close(self) -> None:
         """Close the client and every session in the pool.
@@ -199,4 +206,3 @@ class Client[S: (TCPSessionSettings, SOAPSessionSettings)]:
         pool = getattr(self, "_pool", None)  # Survives half constructed client
         if pool is not None:
             await pool.close()
-        self._authenticated = False

@@ -91,6 +91,7 @@ class SOAPSessionAtom:
             connect=settings.connect_timeout,
             read=settings.read_timeout,
             write=settings.write_timeout,
+            pool=None,
         )
 
         logger.debug(
