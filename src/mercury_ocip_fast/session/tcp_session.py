@@ -3,19 +3,21 @@ from __future__ import annotations
 import asyncio
 import logging
 import ssl
+import time
 import uuid
 from ssl import SSLContext
 
 import attrs
 
-from mercury_ocip_fast_v2.exceptions import (
+from mercury_ocip_fast.exceptions import (
     MErrorMalformedResponse,
     MErrorSocketDropped,
     MErrorSocketInitialisation,
     MErrorSocketTimeout,
 )
-from mercury_ocip_fast_v2.session.session import TCPSessionSettings
-from mercury_ocip_fast_v2.utils.envelopes import build_broadsoft_envelope
+from mercury_ocip_fast.session.session import TCPSessionSettings
+from mercury_ocip_fast.utils.endpoints import split_host_port
+from mercury_ocip_fast.utils.envelopes import build_broadsoft_envelope
 
 logger = logging.getLogger(__name__)
 
@@ -41,12 +43,14 @@ class TCPSessionAtom:
     ssl_context: SSLContext | None
     settings: TCPSessionSettings = attrs.field(default=TCPSessionSettings())
     session_id: str = attrs.field(factory=lambda: str(uuid.uuid4()))
+    created_at: float = attrs.field(factory=time.monotonic)
+    last_used: float = attrs.field(factory=time.monotonic)
 
     @classmethod
     async def open(
         cls,
         endpoint: str,
-        port: int,
+        port: int | None = None,
         *,
         settings: TCPSessionSettings,
         verify_ssl: bool = True,
@@ -57,44 +61,53 @@ class TCPSessionAtom:
         connection. If TLS is on, it also does the TLS handshake.
 
         Args:
-            endpoint: The host name or the IP address of the server.
-            port: The TCP port of the server.
+            endpoint: The address of the server. This is a host, a
+                ``host:port`` pair, or a ``scheme://host:port`` URL. An IPv6
+                host must be in brackets, for example ``[::1]:2209``.
+            port: The TCP port of the server. This argument has priority over
+                a port in the endpoint. The default is 2209 (TLS).
             settings: The timeouts and the read size for the socket.
-            ssl_verify: If true, use TLS and verify the server certificate.
+            verify_ssl: If true, use TLS and verify the server certificate.
 
         Returns:
             A new TCP session with an open socket.
 
         Raises:
             MErrorSocketTimeout: If the connection does not open in time.
-            MErrorSocketInitialisation: If the socket cannot open.
+            MErrorSocketInitialisation: If the endpoint has no host, or the
+                socket cannot open.
         """
         ssl_context = ssl.create_default_context() if verify_ssl else None
 
+        try:
+            host, tcp_port = split_host_port(endpoint, port, default=2209)
+        except ValueError as e:
+            raise MErrorSocketInitialisation(str(e)) from e
+
         logger.debug(
             "Open a TCP session to %s:%d, connect timeout %ss",
-            endpoint,
-            port,
+            host,
+            tcp_port,
             settings.connect_timeout,
         )
 
         try:
             reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(endpoint, port, ssl=ssl_context),
+                asyncio.open_connection(host, tcp_port, ssl=ssl_context),
                 timeout=settings.connect_timeout,
             )
         except TimeoutError as e:
             logger.warning(
                 "Cannot open a TCP session to %s:%d: no connection in %ss",
-                endpoint,
-                port,
+                host,
+                tcp_port,
                 settings.connect_timeout,
             )
             raise MErrorSocketTimeout(
                 f"Connection timeout after {settings.connect_timeout}s"
             ) from e
         except OSError as e:
-            logger.warning("Cannot open a TCP session to %s:%d: %s", endpoint, port, e)
+            logger.warning("Cannot open a TCP session to %s:%d: %s", host, tcp_port, e)
             raise MErrorSocketInitialisation(f"Connection failed: {e}") from e
 
         return cls(
@@ -196,14 +209,15 @@ class TCPSessionAtom:
         """
         try:
             self.writer.close()
+            await self.writer.wait_closed()
         except Exception as e:  # noqa: BLE001
             logger.warning(
                 "The connection raised an exception while closing: %s",
                 e,
             )
 
-    def is_healthy(self) -> bool:
-        """Tell if the session is still usable.
+    def is_alive(self) -> bool:
+        """Tell if the session is still connected.
 
         The session is not healthy if the writer is in a close. The session
         is not healthy if the reader is at the end of the stream.
@@ -218,3 +232,11 @@ class TCPSessionAtom:
             return False
 
         return True
+
+    def is_stale(self) -> bool:
+        """Tell if the session is past its time to live."""
+        return (time.monotonic() - self.created_at) > self.settings.max_ttl_seconds
+
+    def touch(self) -> None:
+        """Mark the session just used."""
+        self.last_used = time.monotonic()

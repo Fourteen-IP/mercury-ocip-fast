@@ -1,8 +1,9 @@
 from dataclasses import dataclass, fields, is_dataclass
-from typing import Any, Generic, Optional, TypeVar, get_type_hints
+from typing import Any, Generic, Optional, Self, TypeVar, get_type_hints
 
 from mercury_ocip_fast.utils.defines import to_snake_case
 from mercury_ocip_fast.utils.parser import Parser
+from mercury_ocip_fast.exceptions import MErrorMalformedResponse, MErrorResponse
 
 
 class OCIType:
@@ -47,11 +48,11 @@ class OCIType:
         return Parser.to_xml_from_class(self)
 
     @classmethod
-    def from_dict(cls: type["OCIType"], data: dict[str, Any]) -> "OCIType":
+    def from_dict(cls, data: dict[str, Any]) -> Self:
         return Parser.to_class_from_dict(data, cls)
 
     @classmethod
-    def from_xml(cls, xml: str) -> "OCIType":
+    def from_xml(cls, xml: str) -> Self:
         return Parser.to_class_from_xml(xml, cls)
 
 

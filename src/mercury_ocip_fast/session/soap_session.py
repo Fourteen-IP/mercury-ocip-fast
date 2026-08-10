@@ -1,24 +1,25 @@
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 
 import attrs
 import httpx
 
-from mercury_ocip_fast_v2.exceptions import (
+from mercury_ocip_fast.exceptions import (
     MErrorHttpDropped,
     MErrorHttpInitialisation,
     MErrorHttpStatus,
     MErrorHttpTimeout,
     MErrorMissingSessionIdentity,
 )
-from mercury_ocip_fast_v2.session.session import (
-    SessionAtom,
+from mercury_ocip_fast.session.session import (
     SessionPair,
     SOAPSessionSettings,
 )
-from mercury_ocip_fast_v2.utils.envelopes import (
+from mercury_ocip_fast.utils.endpoints import override_url_port
+from mercury_ocip_fast.utils.envelopes import (
     build_broadsoft_envelope,
     unwrap_soap,
     wrap_soap,
@@ -49,6 +50,8 @@ class SOAPSessionAtom:
     http_client: httpx.AsyncClient
     settings: SOAPSessionSettings = attrs.field(default=SOAPSessionSettings())
     session_id: str = attrs.field(factory=lambda: str(uuid.uuid4()))
+    created_at: float = attrs.field(factory=time.monotonic)
+    last_used: float = attrs.field(factory=time.monotonic)
 
     @classmethod
     async def open(
@@ -65,13 +68,25 @@ class SOAPSessionAtom:
         cookies. A login must run before the session can send commands.
 
         Args:
-            endpoint: The URL of the SOAP service.
+            endpoint: The full URL of the SOAP service. The URL can hold the
+                port, for example ``https://host:8443/webservice``.
+            port: The port of the service. This argument has priority over a
+                port in the URL. If None, the URL, or the scheme, sets the
+                port.
             settings: The timeouts for the httpx client.
             verify_ssl: If true, verify the TLS certificate of the server.
 
         Returns:
             A new SOAP session.
+
+        Raises:
+            MErrorHttpInitialisation: If the URL has no host.
         """
+        try:
+            url = override_url_port(endpoint, port)
+        except ValueError as e:
+            raise MErrorHttpInitialisation(str(e)) from e
+
         timeout = httpx.Timeout(
             connect=settings.connect_timeout,
             read=settings.read_timeout,
@@ -80,14 +95,17 @@ class SOAPSessionAtom:
 
         logger.debug(
             "Open a SOAP session to %s, connect timeout %ss, read timeout %ss",
-            endpoint,
+            url,
             settings.connect_timeout,
             settings.read_timeout,
         )
 
         return cls(
-            endpoint=endpoint,
-            http_client=httpx.AsyncClient(verify=verify_ssl, timeout=timeout),
+            endpoint=url,
+            http_client=httpx.AsyncClient(
+                verify=verify_ssl,
+                timeout=timeout,
+            ),
             settings=settings,
         )
 
@@ -226,10 +244,10 @@ class SOAPSessionAtom:
                 e,
             )
 
-    def is_healthy(self) -> bool:
-        """Tell if the session is still usable.
+    def is_alive(self) -> bool:
+        """Tell if the session is still connected."""
+        return not self.http_client.is_closed
 
-        The session is healthy if the client is open and it holds a
-        JSESSIONID cookie.
-        """
-        return not self.http_client.is_closed and self.jsessionid is not None
+    def is_stale(self) -> bool:
+        """Tell if the session is past its time to live."""
+        return (time.monotonic() - self.created_at) > self.settings.max_ttl_seconds

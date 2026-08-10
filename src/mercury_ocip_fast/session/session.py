@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Protocol, Self, TypeVar, runtime_checkable
+from typing import Protocol, Self, runtime_checkable
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class SOAPSessionSettings:
     """Timeouts for a SOAP session's httpx client, in seconds."""
 
-    connect_timeout: float = 30.0
-    read_timeout: float = 30.0
-    write_timeout: float = 30.0
+    connect_timeout: float = field(default=30.0)
+    read_timeout: float = field(default=30.0)
+    write_timeout: float = field(default=30.0)
+    max_ttl_seconds: int = field(default=900)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -20,6 +21,7 @@ class TCPSessionSettings:
     connect_timeout: int = field(default=30)
     read_timeout: int = field(default=30)
     read_chunk_size: int = field(default=8192)
+    max_ttl_seconds: int = field(default=900)
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,8 +61,9 @@ class SessionAtom[S: (TCPSessionSettings, SOAPSessionSettings)](Protocol):
         *,
         settings: S,
         verify_ssl: bool = True,
-        **kwargs,
-    ) -> Self: ...
+    ) -> Self:
+        """Open a new session to the endpoint. The session is not logged in."""
+        ...
 
     async def send(self, payload: str | list[str]) -> str:
         """Send one envelope (one or more commands) and return one reply."""
@@ -70,22 +73,37 @@ class SessionAtom[S: (TCPSessionSettings, SOAPSessionSettings)](Protocol):
         """Close the session and let go of its transport."""
         ...
 
-    def is_healthy(self) -> bool:
-        """Is the session still usable?"""
+    def is_alive(self) -> bool:
+        """Is the session still connected?"""
+        ...
+
+    def is_stale(self) -> bool:
+        """Is the session past expiry?"""
         ...
 
 
 @runtime_checkable
-class DetatchableSessionAtom(SessionAtom, Protocol):
+class ResumableSessionAtom[S: (TCPSessionSettings, SOAPSessionSettings)](
+    SessionAtom[S], Protocol
+):
+    """A session atom that also resumes from a stored session pair.
+
+    A SOAP atom has this shape. A TCP atom does not have this shape. A raw
+    socket cannot resume a login.
+
+    Use this shape when the code must resume a session. Use the
+    ``SessionAtom`` shape when the code only sends and closes.
+    """
+
+    @property
+    def pair(self) -> SessionPair: ...
+
     @classmethod
     async def resume(
         cls,
         endpoint: str,
         pair: SessionPair,
         *,
-        settings: TCPSessionSettings | SOAPSessionSettings,
+        settings: S,
         verify_ssl: bool = True,
     ) -> Self: ...
-
-    @property
-    def pair(self) -> SessionPair: ...

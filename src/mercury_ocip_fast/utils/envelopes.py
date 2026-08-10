@@ -4,7 +4,7 @@ import xml.etree.ElementTree as ET
 from enum import StrEnum
 from html import escape
 
-from mercury_ocip_fast_v2.exceptions import MErrorMalformedResponse
+from mercury_ocip_fast.exceptions import MErrorMalformedResponse
 
 
 class SoapWsdl(StrEnum):
