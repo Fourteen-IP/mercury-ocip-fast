@@ -3,6 +3,7 @@ import logging
 
 import attrs
 
+from mercury_ocip_fast.commands.base_command import ErrorResponse, OCIResponse
 from mercury_ocip_fast.commands.commands import (
     AuthenticationRequest,
     AuthenticationResponse,
@@ -11,7 +12,7 @@ from mercury_ocip_fast.commands.commands import (
     LoginResponse14sp4,
     LoginResponse22V5,
 )
-from mercury_ocip_fast.exceptions import MErrorLogin, MErrorResponse
+from mercury_ocip_fast.exceptions import MErrorLogin
 from mercury_ocip_fast.requester import Requester
 from mercury_ocip_fast.session.session import SessionAtom
 
@@ -32,6 +33,18 @@ class Authenticator:
     def _sign(self, nonce: str) -> str:
         authhash = hashlib.sha1(self.password.encode()).hexdigest().lower()
         return hashlib.md5(f"{nonce}:{authhash}".encode()).hexdigest().lower()
+
+    def _reject_error[T: OCIResponse](self, response: T) -> T:
+        """Raise on ErrorResponse so login failures can be catched.
+
+        Raises:
+            MErrorLogin: If ``response`` is an ``ErrorResponse``.
+        """
+        if isinstance(response, ErrorResponse):
+            message = response.summary or "Unknown"
+            logger.warning("The login failed for user %s: %s", self.username, message)
+            raise MErrorLogin(message)
+        return response
 
     async def encrypted_login(self, session: SessionAtom) -> LoginResponse14sp4:
         """Log the session in with an encrypted password.
@@ -55,27 +68,25 @@ class Authenticator:
 
         logger.debug("Start the encrypted login for user %s.", self.username)
 
-        try:
-            auth_resp = await self.requester.send(
+        auth_resp = self._reject_error(
+            await self.requester.send(
                 payload=AuthenticationRequest(user_id=self.username).to_xml(),
                 response_type=AuthenticationResponse,
                 session=session,
             )
+        )
 
-            signed = self._sign(auth_resp.nonce)
+        signed = self._sign(auth_resp.nonce)
 
-            return await self.requester.send(
+        return self._reject_error(
+            await self.requester.send(
                 payload=LoginRequest14sp4(
                     user_id=self.username, signed_password=signed
                 ).to_xml(),
                 response_type=LoginResponse14sp4,
                 session=session,
             )
-        except MErrorResponse as e:
-            logger.warning(
-                "The encrypted login failed for user %s: %s", self.username, e.message
-            )
-            raise MErrorLogin(e.message) from e
+        )
 
     async def generic_login(self, session: SessionAtom) -> LoginResponse22V5:
         """Log the session in with a plain-text password.
@@ -96,16 +107,12 @@ class Authenticator:
 
         logger.debug("Start the generic login for user %s.", self.username)
 
-        try:
-            return await self.requester.send(
+        return self._reject_error(
+            await self.requester.send(
                 payload=LoginRequest22V5(
                     user_id=self.username, password=self.password
                 ).to_xml(),
                 response_type=LoginResponse22V5,
                 session=session,
             )
-        except MErrorResponse as e:
-            logger.warning(
-                "The generic login failed for user %s: %s", self.username, e.message
-            )
-            raise MErrorLogin(e.message) from e
+        )

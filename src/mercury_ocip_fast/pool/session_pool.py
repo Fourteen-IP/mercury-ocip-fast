@@ -10,13 +10,18 @@ from mercury_ocip_fast.exceptions import (
     MErrorPoolClosed,
     MErrorPoolExhausted,
 )
-from mercury_ocip_fast.pool.pool import SessionPoolSettings
-from mercury_ocip_fast.session.session import (
-    SessionAtom,
-    SessionPair,
-)
+from mercury_ocip_fast.session.session import SessionAtom
 
 logger = logging.getLogger(__name__)
+
+
+@attrs.define(slots=True, frozen=True)
+class SessionPoolSettings:
+    """Config for the Session Pool."""
+
+    max_size: int = 5
+    acquire_timeout: float = 10.0
+    wait_timeout: float = 10.0
 
 
 @attrs.define(slots=True)

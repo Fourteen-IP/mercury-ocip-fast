@@ -1,4 +1,4 @@
-from dataclasses import fields, is_dataclass
+from dataclasses import MISSING, fields, is_dataclass
 from typing import (
     Any,
     Protocol,
@@ -497,6 +497,16 @@ class Parser:
             # Handle primitive types and Any
             else:
                 init_args[key] = val
+
+        if is_dataclass(cls):
+            for f in fields(cls):
+                if (
+                    f.init
+                    and f.name not in init_args
+                    and f.default is MISSING
+                    and f.default_factory is MISSING
+                ):
+                    init_args[f.name] = None
 
         return cls(**init_args)
 

@@ -1,12 +1,12 @@
 """Tests for the ``Requester``: send a payload and parse the reply."""
 
 import pytest
-
-from mercury_ocip_fast.commands.commands import AuthenticationResponse
-from mercury_ocip_fast.exceptions import MErrorMalformedResponse, MErrorResponse
-from mercury_ocip_fast.requester import Requester
-
 from conftest import broadsoft_reply, command_xml, error_command_xml
+
+from mercury_ocip_fast.commands.base_command import ErrorResponse
+from mercury_ocip_fast.commands.commands import AuthenticationResponse
+from mercury_ocip_fast.exceptions import MErrorMalformedResponse
+from mercury_ocip_fast.requester import Requester
 
 AUTH_INNER = "<userId>admin</userId><nonce>xyz</nonce>"
 
@@ -28,10 +28,14 @@ class TestParseResponse:
         assert isinstance(result, list)
         assert [r.user_id for r in result] == ["a", "b"]
 
-    def test_error_response_raises(self):
+    def test_error_response_is_returned(self):
+        # A server ErrorResponse is returned in place, like any other
+        # response, not raised. Callers that want a raise (e.g. login) do
+        # their own check on the returned object.
         reply = broadsoft_reply(error_command_xml("Login failed"))
-        with pytest.raises(MErrorResponse):
-            Requester().parse_response(reply, AuthenticationResponse)
+        result = Requester().parse_response(reply, AuthenticationResponse)
+        assert isinstance(result, ErrorResponse)
+        assert result.summary == "Login failed"
 
     def test_missing_command_raises_malformed(self):
         reply = (

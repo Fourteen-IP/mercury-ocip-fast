@@ -6,8 +6,7 @@ import attrs
 
 from mercury_ocip_fast.authenticator import Authenticator
 from mercury_ocip_fast.commands.base_command import OCIRequest, OCIResponse
-from mercury_ocip_fast.pool.pool import SessionPoolSettings
-from mercury_ocip_fast.pool.session_pool import SessionPool
+from mercury_ocip_fast.pool.session_pool import SessionPool, SessionPoolSettings
 from mercury_ocip_fast.requester import Requester
 from mercury_ocip_fast.session.session import (
     SessionAtom,
@@ -141,60 +140,60 @@ class Client[S: (TCPSessionSettings, SOAPSessionSettings)]:
         return await self._async_setup()
 
     @overload
+    async def command[R: OCIResponse](self, request: OCIRequest[R]) -> R: ...
+
+    @overload
+    async def command[R: OCIResponse](
+        self, request: list[OCIRequest[R]]
+    ) -> list[R]: ...
+
+    @overload
     async def command[R: OCIResponse](
         self, request: OCIRequest, *, response_type: type[R]
     ) -> R: ...
 
     @overload
     async def command[R: OCIResponse](
-        self, request: list[OCIRequest], *, response_type: type[R]
+        self, request: list[OCIRequest], *, response_type: type[R] | list[R]
     ) -> list[R]: ...
-
-    @overload
-    async def command(self, request: OCIRequest) -> OCIResponse: ...
-
-    @overload
-    async def command(self, request: list[OCIRequest]) -> list[OCIResponse]: ...
 
     async def command[R: OCIResponse](
         self,
-        request: OCIRequest | list[OCIRequest],
+        request: OCIRequest[R] | list[OCIRequest[R]],
         *,
         response_type: type[R] | None = None,
-    ) -> R | OCIResponse | list[R] | list[OCIResponse]:
+    ) -> R | list[R]:
         """Send one command, or a batch, and return the parsed response(s).
 
-        Give ``response_type`` to type the result as that class. Without it,
-        the result is typed as the base ``OCIResponse``.
+        The result is typed as the request's own response class, resolved
+        from ``OCIRequest[R]``. Pass ``response_type`` only to override that
+        with an explicit class.
 
         Args:
             request: One OCI request, or a list of requests for a batch.
             response_type: The class to parse each response into. If None,
-                the parser uses the base ``OCIResponse``.
+                each request's ``_response_cls`` is used.
 
         Returns:
             The parsed response, or a list of responses for a batch.
         """
-        parse_as: type[OCIResponse] = response_type or OCIResponse
-        all_results: list[OCIResponse] = []
+        all_results: list[R] = []
 
         async with self._pool.session() as atom:
             if isinstance(request, OCIRequest):
                 return await self._requester.send(
                     payload=request.to_xml(),
-                    response_type=parse_as,
+                    response_type=response_type or request._response_cls,
                     session=atom,
                 )
 
             for batch in batched(request, 15):
                 result = await self._requester.send(
                     payload=[b.to_xml() for b in batch],
-                    response_type=parse_as,
+                    response_type=response_type or [b._response_cls for b in batch],
                     session=atom,
                 )
-
-                if isinstance(result, list):
-                    all_results.extend(result)
+                all_results.extend(result)
 
             return all_results
 

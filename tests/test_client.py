@@ -9,7 +9,7 @@ from mercury_ocip_fast.commands.commands import (
     AuthenticationRequest,
     AuthenticationResponse,
 )
-from mercury_ocip_fast.pool.pool import SessionPoolSettings
+from mercury_ocip_fast.pool.session_pool import SessionPoolSettings
 from mercury_ocip_fast.pool.session_pool import SessionPool
 from mercury_ocip_fast.requester import Requester
 from mercury_ocip_fast.session.session import SOAPSessionSettings

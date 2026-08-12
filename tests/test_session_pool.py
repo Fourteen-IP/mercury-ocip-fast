@@ -3,8 +3,7 @@
 import pytest
 
 from mercury_ocip_fast.exceptions import MErrorPoolClosed, MErrorPoolExhausted
-from mercury_ocip_fast.pool.pool import SessionPoolSettings
-from mercury_ocip_fast.pool.session_pool import SessionPool
+from mercury_ocip_fast.pool.session_pool import SessionPool, SessionPoolSettings
 
 from conftest import FakeAtom
 

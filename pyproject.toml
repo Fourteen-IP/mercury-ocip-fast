@@ -49,7 +49,8 @@ keywords = [
 dependencies = [
     "attrs>=21.4.0",
     "httpx>=0.28.0",
-    "xmltodict>=1.0.2"
+    "ty>=0.0.70",
+    "xmltodict>=1.0.2",
 ]
 
 [tool.pytest.ini_options]
@@ -59,13 +60,6 @@ pythonpath = ["src"]
 asyncio_mode = "auto"
 addopts = "-ra -q"
 filterwarnings = ["ignore::DeprecationWarning", "ignore::UserWarning"]
-
-[tool.ruff]
-exclude = ["tests/*", "test_*.py"]
-[tool.ruff.lint.per-file-ignores]
-"**/oci_requests.py" = ["F821", "F401", "F403", "F405"]
-"**/oci_responses.py" = ["F821", "F401", "F403", "F405"]
-"**/oci_types.py" = ["F821", "F401", "F403", "F405"]
 
 [dependency-groups]
 dev = [
@@ -84,8 +78,8 @@ docs = [
     "pymdown-extensions>=10.16.1",
 ]
 
-[tool.pyrefly]
-project-excludes = ["tests/", "sandbox.py", "*/commands.py", "docs/", "scripts/"]
+[tool.ty.src]
+exclude = ["**/commands.py", "tests/**"]
 
 [[tool.uv.index]]
 name = "pypi"

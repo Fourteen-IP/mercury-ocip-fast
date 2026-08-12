@@ -1,0 +1,4 @@
+exclude = ["tests/*", "test_*.py", "**/commands.py"]
+
+[lint.per-file-ignores]
+"**/commands.py" = ["ALL"]

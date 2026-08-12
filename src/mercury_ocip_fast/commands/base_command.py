@@ -1,5 +1,6 @@
+from collections.abc import Sequence
 from dataclasses import dataclass, field, fields, is_dataclass
-from typing import Any, Self, get_type_hints
+from typing import Any, ClassVar, Self, TypeVar, get_args, get_origin, get_type_hints
 
 from mercury_ocip_fast.utils.defines import to_snake_case
 from mercury_ocip_fast.utils.parser import Parser
@@ -7,15 +8,15 @@ from mercury_ocip_fast.utils.parser import Parser
 
 class OCIType:
     """
-    Base class for BroadWorks types.
+    Base Class For Broadworks Types
 
-    Method table:
+    method_table:
 
-    - __init__: sets declared fields from keyword arguments, defaulting the rest to None
-    - to_dict: invokes Parser.to_dict_from_class
-    - to_xml: invokes Parser.to_xml_from_class
-    - from_dict: invokes Parser.to_class_from_dict
-    - from_xml: invokes Parser.to_class_from_xml
+    - __init__: Handles dataclass default initialisation of raw objects
+    - to_dict: Invokes Parser to_dict_from_class
+    - to_xml: Invokes Parser to_xml_from_class
+    - from_dict: Invokes Parser to_class_from_dict
+    - from_xml: Invokes Parser to_class_from_xml
     """
 
     namespace = "C"
@@ -53,18 +54,16 @@ class OCIType:
 
 
 class OCICommand(OCIType):
-    pass
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
 
+T = TypeVar("T")
 type Nillable[T] = T
 
 
 @dataclass
 class OCINil:
-    pass
-
-
-class OCIRequest[TResponse: OCIDataResponse](OCICommand):
     pass
 
 
@@ -80,9 +79,18 @@ class SuccessResponse(OCIResponse):
     pass
 
 
+class OCIRequest[TResponse: OCIResponse](OCICommand):
+    """Base type for every OCI request."""
+
+    _response_cls: type[TResponse]
+
+
 @dataclass
 class OCITableRow:
     col: list[str]
+
+    def __init__(self, col):
+        self.col = col
 
 
 @dataclass
@@ -100,7 +108,6 @@ class OCITable:
         ]
 
 
-@dataclass(kw_only=True)
 class ErrorResponse(OCIResponse):
     error_code: int | None = field(default=None, metadata={"alias": "errorCode"})
     summary: str | None = field(default=None, metadata={"alias": "summary"})
