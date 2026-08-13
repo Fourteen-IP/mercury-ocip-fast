@@ -49,7 +49,6 @@ keywords = [
 dependencies = [
     "attrs>=21.4.0",
     "httpx>=0.28.0",
-    "ty>=0.0.70",
     "xmltodict>=1.0.2",
 ]
 
@@ -67,6 +66,7 @@ dev = [
     "pytest>=8.3.4",
     "pytest-asyncio>=1.1.0",
     "ruff>=0.16.0",
+    "ty>=0.0.71",
 ]
 docs = [
     "mkdocs>=1.6.1",
