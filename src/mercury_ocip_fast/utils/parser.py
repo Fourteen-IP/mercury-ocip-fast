@@ -266,7 +266,7 @@ class Parser:
         )
 
         if not isinstance(output, str):
-            raise ValueError("XML output is not a string")
+            raise TypeError("XML output is not a string")
 
         return output
 
@@ -291,7 +291,7 @@ class Parser:
         attributes: dict[str, Any] = {}
         type_hints = get_type_hints(obj.__class__)
 
-        for attr, hint in type_hints.items():
+        for attr, _ in type_hints:
             value = getattr(obj, attr, None)
             if value is None:
                 continue

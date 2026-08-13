@@ -1,6 +1,5 @@
-from collections.abc import Sequence
 from dataclasses import dataclass, field, fields, is_dataclass
-from typing import Any, ClassVar, Self, TypeVar, get_args, get_origin, get_type_hints
+from typing import Any, Self, TypeVar, get_type_hints
 
 from mercury_ocip_fast.utils.defines import to_snake_case
 from mercury_ocip_fast.utils.parser import Parser

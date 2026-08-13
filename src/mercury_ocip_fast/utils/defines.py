@@ -1,7 +1,7 @@
-import re
-import string
-import secrets
 import random
+import re
+import secrets
+import string
 
 
 def to_snake_case(name: str) -> str:
@@ -59,9 +59,7 @@ def is_none(name: str) -> bool:
     data_type = isinstance(name, str)
     if not data_type:
         return False
-    if name.lower().strip() == "none" or name.strip() == "":
-        return True
-    return False
+    return name.lower().strip() == "none" or name.strip() == ""
 
 
 def generate_secure(length: int = 16) -> str:
