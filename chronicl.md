@@ -51,6 +51,17 @@
 
 
 ## JOURNAL
+@malkin0xb8 12.08.26
+Rewrote the monolithic pool into a more protocol shaped structure: session atom → pool → authenticator → requester → client
+Split pool.py/soap_pool.py into a unified object, supporting both transport types (TCP, SOAP)
+Added SessionClient for per-user SOAP sessions with open/resume/close and SessionPair export
+Switched transport selection from a conn_type string to an atom_type argument (TCPSessionAtom/SOAPSessionAtom)
+Paired each request with its response class, so command() infers the return type and response_type is just an override
+Dropped zeep in favour of direct SOAP envelope/endpoint helpers
+Fixed batched commands (groups of 15 over one session, order preserved) and parser bugs
+Expanded the exception hierarchy with transport-layer and session-identity errors
+Replaced the whole test suite, regenerated commands.py, split out ruff.toml, removed dev scripts/, and rewrote the docs
+
 @malkin0xb8 08.06.26
 Overhauled the client to use a new SOAP pool for stateless connections. Updated docs with specifics but it acts the same as TCP, opening many connections, tracking session-ids, etc.
 
