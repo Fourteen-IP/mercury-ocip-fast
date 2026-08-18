@@ -53,6 +53,9 @@ class Parser:
 
         type_hints = get_type_hints(obj.__class__)
         for attr, hint in type_hints.items():
+            if attr == "_response_cls":
+                continue  # Dont put the response class in the message
+
             value = getattr(obj, attr, None)
 
             # Check if the value is described as nillable in the schema to drop undeclared fields from the command body

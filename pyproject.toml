@@ -62,7 +62,6 @@ filterwarnings = ["ignore::DeprecationWarning", "ignore::UserWarning"]
 
 [dependency-groups]
 dev = [
-    "pyrefly>=0.28.1",
     "pytest>=8.3.4",
     "pytest-asyncio>=1.1.0",
     "ruff>=0.16.0",
