@@ -10,7 +10,6 @@ from ssl import SSLContext
 import attrs
 
 from mercury_ocip_fast.exceptions import (
-    MErrorMalformedResponse,
     MErrorSocketDropped,
     MErrorSocketInitialisation,
     MErrorSocketTimeout,
@@ -134,7 +133,6 @@ class TCPSessionAtom:
             MErrorSocketDropped: If the connection stops during the write
                 or the read.
             MErrorSocketTimeout: If a read does not complete in time.
-            MErrorMalformedResponse: If the reply is not valid text.
         """
         peer = self.writer.get_extra_info("peername")
         oci_xml = build_broadsoft_envelope(payload, self.session_id).encode()
@@ -185,18 +183,7 @@ class TCPSessionAtom:
             if b"</BroadsoftDocument>" in content:
                 break
 
-        try:
-            response = content.rstrip(b"\n").decode()
-        except UnicodeDecodeError as e:
-            logger.warning(
-                "The TCP reply from %s is not valid UTF-8; %d bytes: %s",
-                peer,
-                len(content),
-                e,
-            )
-            raise MErrorMalformedResponse(
-                f"Broadworks returned a byte response which could not be decoded: {e}"
-            ) from e
+        response = content.rstrip(b"\n").decode("iso-8859-1")
 
         logger.debug("Receive %d bytes from %s", len(content), peer)
 

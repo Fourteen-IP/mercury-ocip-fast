@@ -11,6 +11,7 @@ from mercury_ocip_fast.commands.base_command import (
     OCINil,
     OCIRequest,
     OCIResponse,
+    OCITable,
     OCIType,
     SuccessResponse,
 )
