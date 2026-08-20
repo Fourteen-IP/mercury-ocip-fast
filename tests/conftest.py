@@ -1,84 +1,76 @@
+"""Shared fixtures and helpers for the test suite.
+
+The helpers build canned OCI replies. They let the tests run without a real
+BroadWorks server.
 """
-Shared fixtures for mercury_ocip_fast tests.
-"""
 
-import pytest
-from unittest.mock import Mock, AsyncMock
+from __future__ import annotations
 
+import attrs
 
-@pytest.fixture
-def mock_logger():
-    """Create a mock logger with common methods."""
-    return Mock(spec=["info", "debug", "warning", "error", "setLevel", "addHandler"])
+from mercury_ocip_fast.session.session import SessionPair
 
 
-@pytest.fixture
-def mock_stream_reader():
-    """Create a mock asyncio StreamReader."""
-    reader = AsyncMock()
-    reader.read = AsyncMock(return_value=b"")
-    return reader
+def broadsoft_reply(command_body: str, session_id: str = "sid-1") -> str:
+    """Wrap a command body in the BroadsoftDocument reply the server sends."""
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<BroadsoftDocument protocol="OCI"'
+        ' xmlns="C" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+        f'<sessionId xmlns="">{session_id}</sessionId>'
+        f"{command_body}"
+        "</BroadsoftDocument>"
+    )
 
 
-@pytest.fixture
-def mock_stream_writer():
-    """Create a mock asyncio StreamWriter."""
-    writer = AsyncMock()
-    writer.close = Mock()
-    writer.wait_closed = AsyncMock()
-    writer.writelines = Mock()
-    writer.drain = AsyncMock()
-    return writer
+def command_xml(xsi_type: str, inner: str = "") -> str:
+    """Build one ``<command>`` element with an ``xsi:type`` attribute."""
+    return f'<command xsi:type="{xsi_type}">{inner}</command>'
 
 
-@pytest.fixture
-def sample_login_response_xml():
-    """Sample login response XML for testing."""
-    return '''<?xml version="1.0" encoding="ISO-8859-1"?>
-<BroadsoftDocument protocol="OCI" xmlns="C" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-<sessionId>test-session-id</sessionId>
-<command xsi:type="c:LoginResponse22V5">
-<loginType>System</loginType>
-<locale>en_US</locale>
-<encoding>ISO-8859-1</encoding>
-</command>
-</BroadsoftDocument>'''
+def error_command_xml(summary: str = "Boom", code: str = "4001") -> str:
+    """Build one ``ErrorResponse`` command element."""
+    return command_xml(
+        "c:ErrorResponse",
+        f"<summary>{summary}</summary><errorCode>{code}</errorCode>",
+    )
 
 
-@pytest.fixture
-def sample_success_response_xml():
-    """Sample success response XML for testing."""
-    return '''<?xml version="1.0" encoding="ISO-8859-1"?>
-<BroadsoftDocument protocol="OCI" xmlns="C" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-<sessionId>test-session-id</sessionId>
-<command xsi:type="c:SuccessResponse">
-</command>
-</BroadsoftDocument>'''
+@attrs.define(slots=True)
+class FakeAtom:
+    """A stand-in session atom for the pool and client tests.
 
+    The atom does no network work. It returns a queued reply, or the same
+    reply for each send. It tracks its own state, so a test can check the
+    pool behaviour.
+    """
 
-@pytest.fixture
-def sample_error_response_xml():
-    """Sample error response XML for testing."""
-    return '''<?xml version="1.0" encoding="ISO-8859-1"?>
-<BroadsoftDocument protocol="OCI" xmlns="C" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-<sessionId>test-session-id</sessionId>
-<command xsi:type="c:ErrorResponse">
-<errorCode>4962</errorCode>
-<summary>[Error 4962] Invalid userId or password.</summary>
-<summaryEnglish>[Error 4962] Invalid userId or password.</summaryEnglish>
-</command>
-</BroadsoftDocument>'''
+    session_id: str = "fake-sid"
+    reply: str = ""
+    replies: list[str] | None = None
+    alive: bool = True
+    stale: bool = False
+    closed: bool = False
+    sent: list[str | list[str]] = attrs.field(factory=list)
+    _pair: SessionPair | None = None
 
+    async def send(self, payload: str | list[str]) -> str:
+        self.sent.append(payload)
+        if self.replies:
+            return self.replies.pop(0)
+        return self.reply
 
-@pytest.fixture
-def sample_auth_response_xml():
-    """Sample authentication response XML for testing."""
-    return '''<?xml version="1.0" encoding="ISO-8859-1"?>
-<BroadsoftDocument protocol="OCI" xmlns="C" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-<sessionId>test-session-id</sessionId>
-<command xsi:type="c:AuthenticationResponse">
-<userId>admin@example.com</userId>
-<nonce>1234567890abcdef</nonce>
-<passwordAlgorithm>MD5</passwordAlgorithm>
-</command>
-</BroadsoftDocument>'''
+    async def close(self) -> None:
+        self.closed = True
+        self.alive = False
+
+    def is_alive(self) -> bool:
+        return self.alive
+
+    def is_stale(self) -> bool:
+        return self.stale
+
+    @property
+    def pair(self) -> SessionPair:
+        assert self._pair is not None
+        return self._pair

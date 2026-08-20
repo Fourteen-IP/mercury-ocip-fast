@@ -45,7 +45,7 @@ theme:
 
 nav:
 - Overview: index.md
-- Commands Reference: commands/
+- Commands Reference: https://mercury-docs.14ip.net/commands
 - Mercury: https://mercury-docs.14ip.net
 - CLI: https://mercury-cli-docs.14ip.net/
 
@@ -64,9 +64,6 @@ markdown_extensions:
 
 plugins:
 - search
-- gen-files:
-    scripts:
-    - scripts/generate_command_docs.py
 - literate-nav
 - minify_html
 - mkdocstrings:

@@ -1,129 +1,100 @@
 """
-Mercury exceptions
+Mercury Fast exceptions
 """
 
-import attr
+import attrs
 
 
-@attr.s(slots=True, frozen=True)
+@attrs.define(slots=True, frozen=True)
 class MError(Exception):
-    """Base Exception raised by Mercury.
+    """Base Exception raised by mercury-ocip-fast.
 
     Attributes:
         message: Why something failed
-        context: BWKS Type/ Command that failed
     """
 
-    message: str = attr.ib(default="An error occurred in unknown project name")
-    context: object = attr.ib(default=None)
+    message: str = attrs.field(default="An error occurred in mercury-ocip-fast")
 
     def __str__(self):
         return f"{self.__class__.__name__}({self.message})"
 
 
-@attr.s(slots=True, frozen=True)
+@attrs.define(slots=True, frozen=True)
+class MErrorPoolClosed(MError):
+    """The session pool has been closed and can no longer be used."""
+
+
+@attrs.define(slots=True, frozen=True)
+class MErrorPoolExhausted(MError):
+    """No session became available within the timeout."""
+
+
+@attrs.define(slots=True, frozen=True)
 class MErrorResponse(MError):
     """
     Exception raised when an ErrorResponse is received and decoded.
     """
 
-    pass
 
-
-@attr.s(slots=True, frozen=True)
-class MErrorTimeOut(MError):
+@attrs.define(slots=True, frozen=True)
+class MErrorMissingSessionIdentity(MError):
     """
-    Exception raised when nothing is head back from the server.
+    Exception raised when an SessionPair is missing a JSESSIONID.
     """
 
-    pass
 
-
-@attr.s(slots=True, frozen=True)
-class MErrorUnknown(MError):
+@attrs.define(slots=True, frozen=True)
+class MErrorLogin(MError):
     """
-    Exception raised when life becomes too much for the software.
+    A connection failed to log in.
     """
 
-    pass
+
+@attrs.define(slots=True, frozen=True)
+class MErrorTransport(MError):
+    """A transport-layer failure."""
 
 
-@attr.s(slots=True, frozen=True)
-class MErrorAPISetup(MError):
+@attrs.define(slots=True, frozen=True)
+class MErrorMalformedResponse(MErrorTransport):
+    """The server responded with something undecodeable."""
+
+
+@attrs.define(slots=True, frozen=True)
+class MErrorHttpInitialisation(MErrorTransport):
+    """The HTTP connection to BroadWorks could not be established."""
+
+
+@attrs.define(slots=True, frozen=True)
+class MErrorHttpTimeout(MErrorTransport):
+    """The HTTP request to BroadWorks timed out."""
+
+
+@attrs.define(slots=True, frozen=True)
+class MErrorHttpDropped(MErrorTransport):
+    """The HTTP connection dropped mid-request."""
+
+
+@attrs.define(slots=True, frozen=True)
+class MErrorHttpStatus(MErrorTransport):
+    """BroadWorks returned a non-2xx HTTP status."""
+
+    status: int = attrs.field(kw_only=True)
+
+
+@attrs.define(slots=True, frozen=True)
+class MErrorSocketInitialisation(MErrorTransport):
+    """The TCP socket failed to initialise."""
+
+
+@attrs.define(slots=True, frozen=True)
+class MErrorSocketTimeout(MErrorTransport):
+    """The TCP socket's connection to Broadworks timed out."""
+
+
+@attrs.define(slots=True, frozen=True)
+class MErrorSocketDropped(MErrorTransport):
     """
-    Exception raised when life becomes too much for the software.
+    Broadworks abruptly closed the TCP socket or dropped the
+    connection while data was still being sent.
     """
-
-    pass
-
-
-@attr.s(slots=True, frozen=True)
-class MErrorAttributeMissing(MError):
-    """
-    Exception raised when a required attribute is missing.
-    """
-
-    pass
-
-
-@attr.s(slots=True, frozen=True)
-class MErrorUnexpectedAttribute(MError):
-    """
-    Exception raised when additional elements passed to __init__
-    """
-
-    pass
-
-
-@attr.s(slots=True, frozen=True)
-class MErrorSocketInitialisation(MError):
-    """
-    Exception raised when the TCP socket fails to initiate.
-    """
-
-    pass
-
-
-@attr.s(slots=True, frozen=True)
-class MErrorSocketTimeout(MError):
-    """
-    Exception raised when the TCP socket fails to initiate.
-    """
-
-    pass
-
-
-@attr.s(slots=True, frozen=True)
-class MErrorSendRequestFailed(MError):
-    """
-    Exception raised when a requester send request command fails.
-    """
-
-    pass
-
-
-@attr.s(slots=True, frozen=True)
-class MErrorClientInitialisation(MError):
-    """
-    Exception raised when the SOAP Client fails to initiate.
-    """
-
-    pass
-
-
-@attr.s(slots=True, frozen=True)
-class MErrorFailedXMLConversion(MError):
-    """
-    Exception raised when Parser fails to translate XML data to a Dictionary.
-    """
-
-    pass
-
-
-@attr.s(slots=True, frozen=True)
-class MErrorFailedAuthentication(MError):
-    """
-    Exception raised when Client Authentication fails.
-    """
-
-    pass

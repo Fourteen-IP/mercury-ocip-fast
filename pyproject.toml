@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mercury-ocip-fast"
-version = "v2.1.0"
+version = "v3.0.0"
 description = "Asynchronous Python SDK for BroadWorks OCI (Open Client Interface) API"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -50,29 +50,22 @@ dependencies = [
     "attrs>=21.4.0",
     "httpx>=0.28.0",
     "xmltodict>=1.0.2",
-    "zeep[async]>=4.2.0",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
 pythonpath = ["src"]
+asyncio_mode = "auto"
 addopts = "-ra -q"
 filterwarnings = ["ignore::DeprecationWarning", "ignore::UserWarning"]
 
-[tool.ruff]
-exclude = ["tests/*", "test_*.py"]
-[tool.ruff.lint.per-file-ignores]
-"**/oci_requests.py" = ["F821", "F401", "F403", "F405"]
-"**/oci_responses.py" = ["F821", "F401", "F403", "F405"]
-"**/oci_types.py" = ["F821", "F401", "F403", "F405"]
-
 [dependency-groups]
 dev = [
-    "pyrefly>=0.28.1",
     "pytest>=8.3.4",
     "pytest-asyncio>=1.1.0",
-    "ruff>=0.8.1",
+    "ruff>=0.16.0",
+    "ty>=0.0.71",
 ]
 docs = [
     "mkdocs>=1.6.1",
@@ -84,8 +77,8 @@ docs = [
     "pymdown-extensions>=10.16.1",
 ]
 
-[tool.pyrefly]
-project-excludes = ["tests/", "sandbox.py", "*/commands.py", "docs/", "scripts/"]
+[tool.ty.src]
+exclude = ["**/commands.py", "tests/**"]
 
 [[tool.uv.index]]
 name = "pypi"
