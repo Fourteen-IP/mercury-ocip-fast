@@ -17,7 +17,7 @@ from mercury_ocip_fast.session.session import (
 
 @attrs.define(kw_only=True)
 class Client[S: (TCPSessionSettings, SOAPSessionSettings)]:
-    """The top level entry point for OCI-P commands.
+    """An OCI-P Client for a single User.
 
     The client opens sessions, it logs them in as the specified user,
     and sends commands over them.

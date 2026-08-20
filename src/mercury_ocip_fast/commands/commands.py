@@ -95603,7 +95603,7 @@ class SystemCPEConfigParametersGetResponse14sp6(OCIDataResponse):
         pause_between_file_rebuild_milliseconds (int):
         max_busy_time_minutes (int):
         device_access_app_server_cluster_name (str | None):
-        file_rebuild_immediate (anyType | None):
+        file_rebuild_immediate (Any | None):
         file_rebuild_daily (object | None):
         file_rebuild_hourly (object | None):
     """
@@ -95613,7 +95613,7 @@ class SystemCPEConfigParametersGetResponse14sp6(OCIDataResponse):
     pause_between_file_rebuild_milliseconds: int = field(metadata={"alias": "pauseBetweenFileRebuildMilliseconds"})
     max_busy_time_minutes: int = field(metadata={"alias": "maxBusyTimeMinutes"})
     device_access_app_server_cluster_name: str | None = field(default=None, metadata={"alias": "deviceAccessAppServerClusterName"})
-    file_rebuild_immediate: anyType | None = field(default=None, metadata={"alias": "fileRebuildImmediate"})
+    file_rebuild_immediate: Any | None = field(default=None, metadata={"alias": "fileRebuildImmediate"})
     file_rebuild_daily: object | None = field(default=None, metadata={"alias": "fileRebuildDaily"})
     file_rebuild_hourly: object | None = field(default=None, metadata={"alias": "fileRebuildHourly"})
 
@@ -95719,7 +95719,7 @@ class SystemCPEConfigParametersModifyRequest(OCIRequest[SuccessResponse | ErrorR
         pause_between_file_rebuild_milliseconds (int | None):
         max_busy_time_minutes (int | None):
         device_access_app_server_cluster_name (Nillable[str] | None):
-        file_rebuild_immediate (anyType | None):
+        file_rebuild_immediate (Any | None):
         file_rebuild_daily (object | None):
         file_rebuild_hourly (object | None):
     """
@@ -95730,7 +95730,7 @@ class SystemCPEConfigParametersModifyRequest(OCIRequest[SuccessResponse | ErrorR
     pause_between_file_rebuild_milliseconds: int | None = field(default=None, metadata={"alias": "pauseBetweenFileRebuildMilliseconds"})
     max_busy_time_minutes: int | None = field(default=None, metadata={"alias": "maxBusyTimeMinutes"})
     device_access_app_server_cluster_name: Nillable[str] | None = field(default=None, metadata={"alias": "deviceAccessAppServerClusterName"})
-    file_rebuild_immediate: anyType | None = field(default=None, metadata={"alias": "fileRebuildImmediate"})
+    file_rebuild_immediate: Any | None = field(default=None, metadata={"alias": "fileRebuildImmediate"})
     file_rebuild_daily: object | None = field(default=None, metadata={"alias": "fileRebuildDaily"})
     file_rebuild_hourly: object | None = field(default=None, metadata={"alias": "fileRebuildHourly"})
 
@@ -111779,12 +111779,12 @@ class SystemDeviceManagementInProgressAndPendingEventCancelRequest(OCIRequest[Su
       The response is either a SuccessResponse or an ErrorResponse.
 
     Attributes:
-        cancel_all_events (anyType | None):
+        cancel_all_events (Any | None):
         cancel_multiple_events (object | None):
         event_id (list[int] | None):
     """
     _response_cls: ClassVar[type] = SuccessResponse | ErrorResponse
-    cancel_all_events: anyType | None = field(default=None, metadata={"alias": "cancelAllEvents"})
+    cancel_all_events: Any | None = field(default=None, metadata={"alias": "cancelAllEvents"})
     cancel_multiple_events: object | None = field(default=None, metadata={"alias": "cancelMultipleEvents"})
     event_id: list[int] | None = field(default=None, metadata={"alias": "eventId"})
 

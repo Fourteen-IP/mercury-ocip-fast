@@ -21,13 +21,9 @@ R = TypeVar("R", bound=OCIResponse)
 class Requester:
     """Send OCI payloads over a session and parse the responses.
 
-    A stateless service that delegates transport to a ``SessionAtom`` and
-    delegates XML-to-dict parsing to the ``Parser`` utility. The caller
-    supplies the expected response type so the result is typed as ``R``.
-
-    Attributes:
-        None. This class holds no state; it is a thin orchestration layer
-        between a session and the parser.
+    A stateless class. The caller supplies the expected response type so the
+    result is typed as ``R``. Transport is delegated to a ``SessionAtom``, and
+    XML-to-dict parsing is delegated to ``Parser``.
     """
 
     @overload

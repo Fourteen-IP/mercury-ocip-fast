@@ -25,9 +25,8 @@ logger = logging.getLogger(__name__)
 class TCPSessionAtom:
     """A TCP session for BroadWorks.
 
-    The session owns its transport and its identity. The transport is an
-    asyncio stream. The stream has a reader and a writer. The session
-    sends the OCI-P document on the raw socket. It does not use SOAP.
+    The transport is an asyncio stream. The stream has a reader and a writer.
+    The session sends the OCI-P document on the raw socket.
 
     Attributes:
         reader: The stream reader for the socket.

@@ -21,29 +21,23 @@ type SoapAtom = ResumableSessionAtom[SOAPSessionSettings]
 
 @attrs.define(kw_only=True)
 class SessionClient:
-    """A multi-tenant entry point for OCI-P commands.
+    """OCI-P client.
 
-    This client keeps no identity. This client keeps no session list. You open a
-    session, you send commands on it, and you close it. You can also export a
-    session and resume it later.
+    A multi-tenant client. It holds no identity and keeps no session list.
+    The client shares one requester across all sessions; each opened session is
+    owned by its caller and may be passed around, closed, or exported and later
+    resumed.
 
-    The client is a thin factory. It shares one requester across all sessions.
-    You own each session that you open. You must close each session when your
-    work is complete.
-
-    The client needs an async setup step before use. Make the client with the
-    ``create`` method, or use it in an ``async with`` block.
+    Set up the client with ``create()`` or an ``async with`` block.
 
     Attributes:
-        host: The host name or address of the BroadWorks server.
-        port: The port of the server. If None, the endpoint or the scheme
-            sets the port.
-        atom_type: The class of resumable session to open, for example the
-            SOAP atom.
-        session_config: The transport settings for each session.
-        tls: If true, use a TLS link. A TLS link protects the password, so the
-            client uses the plain-text login. If false, the client uses the
-            encrypted login.
+        host: BroadWorks server hostname or address.
+        port: BroadWorks server port. If ``None``, the endpoint or scheme
+            supplies it.
+        atom_type: Resumable session class to open, such as the SOAP atom.
+        session_config: Transport settings for each session.
+        tls: Whether to use TLS. If true, the client uses plain-text login; if
+            false, it uses the encrypted login.
     """
 
     host: str

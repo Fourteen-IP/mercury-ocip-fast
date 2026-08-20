@@ -1,506 +1,243 @@
-from dataclasses import MISSING, fields, is_dataclass
-from typing import (
-    Any,
-    Protocol,
-    TypeVar,
-    Union,
-    cast,
-    get_args,
-    get_type_hints,
-    runtime_checkable,
-)
+"""Schema-driven OCI parser."""
+
+from __future__ import annotations
+
+import types
+from dataclasses import MISSING, dataclass, fields, is_dataclass
+from enum import Enum, auto
+from functools import cache
+from typing import Any, ClassVar, Union, cast, get_args, get_origin, get_type_hints
 
 import xmltodict
 
 from mercury_ocip_fast.utils.defines import snake_to_camel, to_snake_case
-
-OCIType = TypeVar("OCIType")
-T = TypeVar("T")
+from mercury_ocip_fast.utils.oci_types import OCINil, OCITable, OCITableRow
 
 
-@runtime_checkable
-class HasFieldAliases(Protocol):
-    """Protocol for objects that have field aliases."""
+class FieldKind(Enum):
+    SCALAR = auto()
+    OBJECT = auto()
+    LIST = auto()
+    TABLE = auto()
 
-    def get_field_aliases(self) -> dict[str, str]: ...
+
+@dataclass(frozen=True)
+class FieldSpec:
+    """Hold the resolved metadata for one dataclass field."""
+
+    name: str
+    alias: str
+    kind: FieldKind
+    subtype: type | None
 
 
 class Parser:
-    """
-    Base Class For OCI Object Parsing & type Translation using xmltodict
+    """Translate OCI objects between class, dict and XML forms."""
 
-    method table:
-
-    - to_xml_from_class: Translates class object to xml
-    - to_xml_from_dict: Translates dictionary object to xml
-    - to_dict_from_class: Translates class object to dictionary
-    - to_dict_from_xml: Translates xml into dictionary
-    - to_class_from_dict: Translates dictionary object to class
-    - to_class_from_xml: Translates xml to class
-    """
+    _CONVERTERS: ClassVar[dict[type, Any]] = {
+        bool: lambda v: v.lower() == "true",
+        int: int,
+        float: float,
+    }
 
     @staticmethod
     def to_xml_from_class(obj: object) -> str:
-        """Convert a class instance to XML string."""
-        aliases: dict[str, str] = {}
-        if isinstance(obj, HasFieldAliases):
-            aliases = obj.get_field_aliases()
-
-        root_content: dict[str, Any] = {
+        """Convert an object to an XML command string."""
+        # "@" keys become XML attributes on the <command> root element
+        root = {
             "@xmlns": "",
-            "@xsi:type": obj.__class__.__name__,
+            "@xsi:type": type(obj).__name__,
+            **Parser._encode(obj),
         }
-
-        type_hints = get_type_hints(obj.__class__)
-        for attr, hint in type_hints.items():
-            if attr == "_response_cls":
-                continue  # Dont put the response class in the message
-
-            value = getattr(obj, attr, None)
-
-            # Check if the value is described as nillable in the schema to drop undeclared fields from the command body
-            if value is not None and (
-                type(value).__name__ == "OCINil"
-                or (isinstance(value, type) and value.__name__ == "OCINil")
-            ):
-                key = aliases.get(attr, snake_to_camel(attr))
-                root_content[key] = {"@C:nil": "true"}
-                continue
-
-            if value is None:
-                continue
-
-            key = aliases.get(attr, snake_to_camel(attr))
-
-            def _convert_with_aliases(
-                dct: dict[str, Any], aliases_map: dict[str, str] | None
-            ) -> dict[str, Any]:
-                new_d: dict[str, Any] = {}
-                for k, v in dct.items():
-                    if aliases_map and k in aliases_map:
-                        new_k = aliases_map[k]
-                    else:
-                        new_k = snake_to_camel(k)
-                    new_d[new_k] = convert_keys(v)
-                return new_d
-
-            # resolve declared subtype for lists/optionals to aid xsi:type emission
-            _origin = getattr(hint, "__origin__", None)
-            _args = get_args(hint)
-            _declared_subtype = _args[0] if _origin in (list, list) and _args else None
-
-            def serialize_obj_with_aliases(
-                o: object, declared_hint: Any | None = None
-            ) -> dict[str, Any]:
-                """Serialize an object to a dict while applying its field aliases recursively."""
-                aliases_map: dict[str, str] = {}
-                get_aliases = getattr(o, "get_field_aliases", None)
-                if callable(get_aliases):
-                    aliases_map = cast(dict[str, str], get_aliases())
-
-                # Start from the generic dict conversion, then replace nested objects/lists
-                attrs = Parser.to_dict_from_class(o, wrap_in_class_name=False)
-
-                # Walk the type hints to replace nested object/list entries with recursive serialization
-                obj_type_hints = get_type_hints(o.__class__)
-                for a, h in obj_type_hints.items():
-                    if a not in attrs:
-                        continue
-                    raw_val = getattr(o, a, None)
-                    if raw_val is None:
-                        continue
-
-                    # Propagate declared hint for nested attributes so xsi:type can be emitted when needed
-                    if hasattr(raw_val, "__dict__"):
-                        attrs[a] = serialize_obj_with_aliases(raw_val, declared_hint=h)
-                    elif isinstance(raw_val, list):
-                        _a_origin = getattr(h, "__origin__", None)
-                        _a_args = get_args(h)
-                        _a_subtype = (
-                            _a_args[0]
-                            if _a_origin in (list, list) and _a_args
-                            else None
-                        )
-
-                        new_list: list[Any] = []
-                        for it in raw_val:
-                            if hasattr(it, "__dict__"):
-                                new_list.append(
-                                    serialize_obj_with_aliases(
-                                        it, declared_hint=_a_subtype
-                                    )
-                                )
-                            else:
-                                new_list.append(it)
-                        attrs[a] = new_list
-
-                # If declared_hint indicates a different runtime class, add xsi:type attribute
-                declared_name = None
-                if declared_hint is not None:
-                    # unwrap Optional / Union
-                    d_origin = getattr(declared_hint, "__origin__", None)
-                    d_args = get_args(declared_hint)
-                    if d_origin is Union and d_args:
-                        non_none = [x for x in d_args if x is not type(None)]
-                        if non_none:
-                            declared_hint = non_none[0]
-                    if getattr(declared_hint, "__name__", None):
-                        declared_name = declared_hint.__name__
-
-                if declared_name and declared_name != o.__class__.__name__:
-                    result = _convert_with_aliases(attrs, aliases_map)
-                    # inject xsi type attribute using prefix xsi to match root
-                    result["@xsi:type"] = o.__class__.__name__
-                    return result
-
-                return _convert_with_aliases(attrs, aliases_map)
-
-            def convert_keys(d: Any) -> Any:
-                """Recursively convert dictionary keys to camelCase."""
-                if isinstance(d, dict):
-                    return _convert_with_aliases(d, None)
-                elif isinstance(d, list):
-                    result_list = []
-                    for i in d:
-                        # If list item is an object, convert it to dict first
-                        if hasattr(i, "__dict__"):
-                            # If the item exposes field aliases, use them when converting
-                            item_aliases: dict[str, str] = {}
-                            get_aliases = getattr(i, "get_field_aliases", None)
-                            if callable(get_aliases):
-                                item_aliases = cast(dict[str, str], get_aliases())
-                            result_list.append(
-                                _convert_with_aliases(
-                                    Parser.to_dict_from_class(i), item_aliases
-                                )
-                            )
-                        else:
-                            result_list.append(convert_keys(i))
-                    return result_list
-                elif isinstance(d, bool):
-                    return str(d).lower()
-                else:
-                    return d
-
-            # Check if this is a table structure (list of dicts with consistent keys)
-            if isinstance(value, list) and value and isinstance(value[0], dict):
-                # Check if all items have the same keys (table-like structure)
-                first_keys = set(value[0].keys())
-                is_table = all(
-                    set(item.keys()) == first_keys
-                    for item in value
-                    if isinstance(item, dict)
-                )
-
-                if is_table and key.endswith("Table"):
-                    # This is a table structure
-                    table_dict: dict[str, Any] = {}
-
-                    # Add column headings (from dict keys)
-                    table_dict["colHeading"] = list(first_keys)
-
-                    # Add rows
-                    rows = []
-                    for item in value:
-                        cols = [str(item.get(k, "")) for k in first_keys]
-                        rows.append({"col": cols})
-                    table_dict["row"] = rows
-
-                    root_content[key] = table_dict
-                    continue
-
-                # Attempt to fetch alias mapping from subtype arguements if an object is nested.
-                # This attempts to resolve the issue of class types being passed via a list or tuple into commands
-                # Originally, there was no implementation to query a list member to extract potential field aliases leading to the snake_to_camel fallback
-                origin = getattr(hint, "__origin__", None)
-                args = get_args(hint)
-                subtype = args[0] if origin in (list, list) and args else None
-                subtype_aliases = None
-                if subtype is not None and is_dataclass(subtype):
-                    subtype_aliases = {
-                        f.name: f.metadata.get("alias", f.name) for f in fields(subtype)
-                    }
-
-                processed_list = []
-                for item in value:
-                    if isinstance(item, dict):
-                        processed_list.append(
-                            _convert_with_aliases(item, subtype_aliases)
-                        )
-                    else:
-                        # Fallback to generic conversion
-                        processed_list.append(convert_keys(item))
-
-                root_content[key] = processed_list
-                continue
-
-            if isinstance(value, list):
-                if not value:  # empty list
-                    continue
-
-                processed_list: list[Any] = []
-                for item in value:
-                    if hasattr(item, "__dict__"):
-                        # Serialize object recursively with its own aliases
-                        processed_list.append(
-                            serialize_obj_with_aliases(
-                                item, declared_hint=_declared_subtype
-                            )
-                        )
-                    else:
-                        processed_list.append(
-                            str(item).lower() if isinstance(item, bool) else item
-                        )
-
-                # Assign the processed list
-                root_content[key] = processed_list
-            elif hasattr(value, "__dict__"):
-                # Serialize nested object with its own aliases, passing the declared hint so xsi:type can be emitted if needed
-                root_content[key] = serialize_obj_with_aliases(
-                    value, declared_hint=hint
-                )
-            else:
-                root_content[key] = (
-                    str(value).lower() if isinstance(value, bool) else value
-                )
-
-        output = xmltodict.unparse(
-            {"command": root_content}, full_document=False, short_empty_elements=False
+        return xmltodict.unparse(
+            {"command": root}, full_document=False, short_empty_elements=False
         )
 
-        if not isinstance(output, str):
-            raise TypeError("XML output is not a string")
-
-        return output
-
     @staticmethod
-    def to_xml_from_dict(data: dict[str, Any], cls: type[OCIType]) -> str:
-        """Convert a dictionary to XML via class instance."""
-        obj = Parser.to_class_from_dict(data, cls)
-        return Parser.to_xml_from_class(obj)
+    def to_xml_from_dict[T](data: dict[str, Any], cls: type[T]) -> str:
+        """Convert a dict to an XML command string."""
+        return Parser.to_xml_from_class(Parser._decode(data, cls))
 
     @staticmethod
     def to_dict_from_class(
-        obj: object,
-        wrap_in_class_name: bool = False,  # Changed default to False
+        obj: object, wrap_in_class_name: bool = False
     ) -> dict[str, Any]:
-        """Convert a class instance to a dictionary.
-
-        Args:
-            obj: The object to convert
-            wrap_in_class_name: If True, wraps the result in {ClassName: attributes}.
-                               If False (default), returns just the attributes dict.
-        """
-        attributes: dict[str, Any] = {}
-        type_hints = get_type_hints(obj.__class__)
-
-        for attr, _ in type_hints:
-            value = getattr(obj, attr, None)
-            if value is None:
-                continue
-
-            # Handle OCITable first (most specific)
-            if type(value).__name__ == "OCITable":
-                table_dict = value.to_dict()
-                if "OciTable" in table_dict:
-                    attributes[attr] = table_dict["OciTable"]
-                else:
-                    attributes[attr] = table_dict
-            # Handle lists
-            elif isinstance(value, list):
-                processed_list = []
-                for item in value:
-                    if hasattr(item, "__dict__"):
-                        processed_list.append(
-                            Parser.to_dict_from_class(item, wrap_in_class_name=False)
-                        )
-                    else:
-                        processed_list.append(item)
-                attributes[attr] = processed_list
-            # Handle nested objects
-            elif hasattr(value, "__dict__"):
-                attributes[attr] = Parser.to_dict_from_class(
-                    value, wrap_in_class_name=False
-                )
-            # Handle primitives
-            else:
-                attributes[attr] = value
-
-        # Optionally wrap attributes in command name
-        if wrap_in_class_name:
-            return {obj.__class__.__name__: attributes}
-        return attributes
+        """Convert an object to a dict."""
+        result = Parser._encode(obj)
+        return {type(obj).__name__: result} if wrap_in_class_name else result
 
     @staticmethod
     def to_dict_from_xml(xml: str) -> dict[str, Any]:
-        """Parse XML string to dictionary."""
+        """Parse an XML string into a dict."""
         if not isinstance(xml, str):
             return {}
-
         parsed = xmltodict.parse(xml)
-        if not parsed or not isinstance(parsed, dict):
+        if not parsed:
             return {}
-
-        root_key = str(next(iter(parsed.keys())))
-        root_val = parsed[root_key]
-
-        return cast(dict[str, Any], Parser._process_dict_item(root_key, root_val))
+        root_key = next(iter(parsed))
+        return cast(dict[str, Any], Parser._clean(root_key, parsed[root_key]))
 
     @staticmethod
-    def _process_dict_item(key: str, value: Any) -> Any:
-        """Process individual dictionary items during XML parsing."""
-        # Handle OCITable special case
+    def to_class_from_dict[T](data: dict[str, Any], cls: type[T]) -> T:
+        """Convert a dict to an instance of cls."""
+        return Parser._decode(data, cls)
+
+    @staticmethod
+    def to_class_from_xml[T](xml: str, cls: type[T]) -> T:
+        """Parse an XML string and convert it to an instance of cls."""
+        return Parser._decode(Parser.to_dict_from_xml(xml), cls)
+
+    @staticmethod
+    @cache
+    def _schema(target: type) -> tuple[FieldSpec, ...]:
+        """Build the field schema for a class. Cache the result."""
+        field_map = {f.name: f for f in fields(target)} if is_dataclass(target) else {}
+        specs = []
+
+        for name, hint in get_type_hints(target).items():
+            if name.startswith("_"):
+                continue
+
+            f = field_map.get(name)
+            alias = (
+                f.metadata["alias"]
+                if f and "alias" in f.metadata
+                else snake_to_camel(name)
+            )
+            inner = Parser._unwrap(hint)
+
+            if isinstance(inner, type) and issubclass(inner, OCITable):
+                kind, subtype = FieldKind.TABLE, None
+            elif get_origin(inner) is list:
+                args = get_args(inner)
+                kind, subtype = FieldKind.LIST, args[0] if args else None
+            elif isinstance(inner, type) and is_dataclass(inner):
+                kind, subtype = FieldKind.OBJECT, inner
+            else:
+                kind = FieldKind.SCALAR
+                subtype = inner if isinstance(inner, type) else None
+
+            specs.append(FieldSpec(name, alias, kind, subtype))
+
+        return tuple(specs)
+
+    @staticmethod
+    def _unwrap(hint: Any) -> Any:
+        """Remove Optional, Union and Nillable wrappers from a type hint."""
+        while True:
+            origin = get_origin(hint)
+            args = get_args(hint)
+
+            # Optional[X] and X | None have different origins at runtime
+            if origin is Union or isinstance(hint, types.UnionType):
+                non_none = [a for a in args if a is not type(None)]
+                if len(non_none) != 1:
+                    return hint
+                hint = non_none[0]
+            elif origin is list or origin is None or not args:
+                return hint
+            else:
+                # Nillable[T] is a runtime alias
+                hint = args[0]
+
+    @staticmethod
+    def _encode(obj: object, declared: type | None = None) -> dict[str, Any]:
+        """Convert an object to a wire dict."""
+        cls = type(obj)
+        result: dict[str, Any] = {}
+
+        if declared is not None and declared.__name__ != cls.__name__:
+            result["@xsi:type"] = cls.__name__
+
+        for spec in Parser._schema(cls):
+            value = getattr(obj, spec.name, None)
+            if value is None:
+                continue
+            if isinstance(value, OCINil):
+                result[spec.alias] = {"@C:nil": "true"}
+            elif isinstance(value, bool):
+                result[spec.alias] = str(value).lower()
+            elif isinstance(value, OCITable):
+                result[spec.alias] = {
+                    "colHeading": value.col_heading,
+                    "row": [{"col": row.col} for row in value.row],
+                }
+            elif spec.kind is FieldKind.OBJECT:
+                result[spec.alias] = Parser._encode(value, declared=spec.subtype)
+            elif spec.kind is FieldKind.LIST and value:
+                result[spec.alias] = Parser._encode_list(value, spec)
+            elif spec.kind is FieldKind.SCALAR:
+                result[spec.alias] = value
+
+        return result
+
+    @staticmethod
+    def _encode_list(items: list[Any], spec: FieldSpec) -> list[Any] | dict[str, Any]:
+        """Convert a list field. Emit table format for table-shaped dict lists."""
+        first = items[0]
         if (
-            "Table" in key
-            and isinstance(value, dict)
-            and "colHeading" in value
-            and "row" in value
+            isinstance(first, dict)
+            and spec.alias.endswith("Table")
+            and all(isinstance(i, dict) and i.keys() == first.keys() for i in items)
         ):
-            from mercury_ocip_fast.commands.base_command import OCITable, OCITableRow
+            headings = list(first)
+            return {
+                "colHeading": headings,
+                "row": [{"col": [str(i.get(k, "")) for k in headings]} for i in items],
+            }
 
-            col_headings = value["colHeading"]
-            if not isinstance(col_headings, list):
-                col_headings = [col_headings]
-
-            rows_data = value["row"]
-            if not isinstance(rows_data, list):
-                rows_data = [rows_data]
-
-            rows: list[OCITableRow] = []
-            for r in rows_data:
-                cols = r.get("col", [])
-                if not isinstance(cols, list):
-                    cols = [cols]
-                rows.append(OCITableRow(col=cols))
-
-            return OCITable(col_heading=col_headings, row=rows)
-
-        # Handle dictionaries
-        if isinstance(value, dict):
-            if "#text" in value:
-                return value["#text"]
-
-            new_val: dict[str, Any] = {}
-            attributes: dict[str, Any] = {}
-
-            for k, v in value.items():
-                if k.startswith("@"):
-                    # Handle attributes
-                    attr_name = k[1:]
-                    if ":" in attr_name:
-                        prefix, local = attr_name.split(":", 1)
-                        attributes[attr_name] = v
-                        attributes[local] = v
-                        if prefix in ("xsi", "C"):
-                            attributes[
-                                f"{{http://www.w3.org/2001/XMLSchema-instance}}{local}"
-                            ] = v
-                    else:
-                        attributes[attr_name] = v
-                else:
-                    if isinstance(v, list):
-                        new_val[k] = [Parser._process_dict_item(k, i) for i in v]
-                    else:
-                        new_val[k] = Parser._process_dict_item(k, v)
-
-            if attributes:
-                new_val["attributes"] = attributes
-
-            return new_val
-
-        # Handle None
-        if value is None:
-            return ""
-
-        return value
+        result = []
+        for item in items:
+            if isinstance(item, bool):
+                result.append(str(item).lower())
+            elif is_dataclass(item) and not isinstance(item, type):
+                result.append(Parser._encode(item, declared=spec.subtype))
+            else:
+                result.append(item)
+        return result
 
     @staticmethod
-    def to_class_from_dict(data: dict[str, Any], cls: type[OCIType]) -> OCIType:
-        """Convert a dictionary to a class instance."""
-        type_hints = get_type_hints(cls)
-
+    def _decode[T](data: dict[str, Any], cls: type[T]) -> T:
+        """Convert a wire dict to an instance of cls."""
         if not isinstance(data, dict):
             raise TypeError(
                 f"Expected dict for {cls.__name__}, got {type(data).__name__}"
             )
 
-        source = data
+        source = data.get(cls.__name__, data.get("command", data))
+        if not isinstance(source, dict):
+            raise TypeError(
+                f"Expected dict for {cls.__name__}, got {type(source).__name__}"
+            )
 
-        # Handle wrapped format: {"ClassName": {...attributes...}}
-        if cls.__name__ in data:
-            source = data[cls.__name__]
-            if not isinstance(source, dict):
-                raise TypeError(
-                    f"Expected dict for {cls.__name__}, got {type(source).__name__}"
-                )
-        # Legacy: handle "command" wrapper
-        elif "command" in data:
-            command_data = data["command"]
-            if not isinstance(command_data, dict):
-                raise TypeError(
-                    f"Expected dict for command, got {type(command_data).__name__}"
-                )
-            source = command_data
+        cls = Parser._concrete_type(cls, source)
 
-        snake_case_source: dict[str, Any] = {
-            to_snake_case(k): v for k, v in source.items()
-        }
-
+        source = {to_snake_case(k): v for k, v in source.items()}
         init_args: dict[str, Any] = {}
 
-        for key, hint in type_hints.items():
-            if key not in snake_case_source:
+        for spec in Parser._schema(cls):
+            if spec.name not in source:
                 continue
+            value = source[spec.name]
 
-            val = snake_case_source[key]
-            origin = getattr(hint, "__origin__", None)
-            args = get_args(hint)
-
-            # Handle Optional types (which are Union[T, None])
-            if origin is Union:
-                non_none_args = [arg for arg in args if arg is not type(None)]
-                if non_none_args:
-                    hint = non_none_args[0]
-                    origin = getattr(hint, "__origin__", None)
-                    args = get_args(hint)
-
-            # Handle Nillable[T]
-            while origin is not None and origin not in (list, list) and args:
-                hint = args[0]
-                origin = getattr(hint, "__origin__", None)
-                args = get_args(hint)
-
-            # Handle list types
-            if origin in (list, list):
-                if not args:
-                    init_args[key] = val if isinstance(val, list) else [val]
-                    continue
-
-                subtype = args[0]
-                if isinstance(val, list):
-                    init_args[key] = [
-                        Parser.to_class_from_dict({subtype.__name__: v}, subtype)
-                        if isinstance(v, dict)
-                        and hasattr(subtype, "__mro__")
-                        and subtype is not Any
-                        else v
-                        for v in val
-                    ]
-                else:
-                    init_args[key] = [
-                        Parser.to_class_from_dict({subtype.__name__: val}, subtype)
-                        if isinstance(val, dict)
-                        and hasattr(subtype, "__mro__")
-                        and subtype is not Any
-                        else val
-                    ]
-            # Handle nested class types (but not Any)
-            elif hint is not Any and isinstance(val, dict) and hasattr(hint, "__mro__"):
-                init_args[key] = Parser.to_class_from_dict({hint.__name__: val}, hint)
-            # Handle primitive types and Any
+            if spec.kind is FieldKind.OBJECT and isinstance(value, dict):
+                value = Parser._decode(value, cast(type, spec.subtype))
+            elif spec.kind is FieldKind.TABLE:
+                value = Parser._decode_table(value)
+            elif spec.kind is FieldKind.LIST:
+                # xmltodict yields a bare value for a single element
+                items = value if isinstance(value, list) else [value]
+                value = [
+                    Parser._decode(i, spec.subtype)
+                    if isinstance(i, dict) and spec.subtype
+                    else Parser._coerce(i, spec.subtype)
+                    for i in items
+                ]
             else:
-                init_args[key] = val
+                value = Parser._coerce(value, spec.subtype)
+            init_args[spec.name] = value
 
+        # Missing required fields become None so partial responses construct
         if is_dataclass(cls):
             for f in fields(cls):
                 if (
@@ -514,6 +251,101 @@ class Parser:
         return cls(**init_args)
 
     @staticmethod
-    def to_class_from_xml(xml: str, cls: type[OCIType]) -> OCIType:
-        """Parse XML string and convert to class instance."""
-        return Parser.to_class_from_dict(Parser.to_dict_from_xml(xml), cls)
+    def _concrete_type[T](declared: type[T], source: dict[str, Any]) -> type[T]:
+        """Return the xsi:type subtype named in source, or declared itself.
+
+        A field may declare an abstract base, for example ``DepartmentKey``,
+        while the reply carries a concrete subtype such as
+        ``EnterpriseDepartmentKey`` marked with ``xsi:type``.
+        """
+        attributes = source.get("attributes")
+        if not isinstance(attributes, dict):
+            return declared
+
+        xsi_type = attributes.get("type") or attributes.get(
+            "{http://www.w3.org/2001/XMLSchema-instance}type"
+        )
+        if not isinstance(xsi_type, str):
+            return declared
+
+        name = xsi_type.split(":", 1)[-1]
+        stack = list(declared.__subclasses__())
+        while stack:
+            sub = stack.pop()
+            if sub.__name__ == name:
+                return sub
+            stack.extend(sub.__subclasses__())
+
+        return declared
+
+    @staticmethod
+    def _coerce(value: Any, target: type | None) -> Any:
+        """Convert a wire string to the scalar type of the field."""
+        convert = Parser._CONVERTERS.get(target) if target is not None else None
+        if convert is None or not isinstance(value, str):
+            return value
+        try:
+            return convert(value)
+        except ValueError:
+            # Keep unparseable values, for example an empty tag, as-is
+            return value
+
+    @staticmethod
+    def _decode_table(value: Any) -> Any:
+        """Convert a colHeading/row dict to an OCITable."""
+        if not isinstance(value, dict) or "colHeading" not in value:
+            return value
+
+        def as_list(v: Any) -> list[Any]:
+            return v if isinstance(v, list) else [v]
+
+        return OCITable(
+            col_heading=as_list(value["colHeading"]),
+            row=[
+                OCITableRow(col=as_list(r.get("col", [])))
+                for r in as_list(value.get("row", []))
+            ],
+        )
+
+    @staticmethod
+    def _clean(key: str, value: Any) -> Any:
+        """Normalize one node of xmltodict output."""
+        if (
+            "Table" in key
+            and isinstance(value, dict)
+            and "colHeading" in value
+            and "row" in value
+        ):
+            return Parser._decode_table(value)
+
+        if not isinstance(value, dict):
+            return "" if value is None else value
+
+        if "#text" in value:
+            return value["#text"]
+
+        cleaned: dict[str, Any] = {}
+        attributes: dict[str, Any] = {}
+
+        for k, v in value.items():
+            if not k.startswith("@"):
+                cleaned[k] = (
+                    [Parser._clean(k, i) for i in v]
+                    if isinstance(v, list)
+                    else Parser._clean(k, v)
+                )
+                continue
+
+            name = k[1:]
+            attributes[name] = v
+            if ":" in name:
+                prefix, local = name.split(":", 1)
+                attributes[local] = v
+                # Consumers match attributes in W3C Clark notation
+                if prefix in ("xsi", "C"):
+                    key_ns = "{http://www.w3.org/2001/XMLSchema-instance}"
+                    attributes[f"{key_ns}{local}"] = v
+
+        if attributes:
+            cleaned["attributes"] = attributes
+        return cleaned

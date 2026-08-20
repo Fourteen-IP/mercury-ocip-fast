@@ -32,9 +32,8 @@ logger = logging.getLogger(__name__)
 class SOAPSessionAtom:
     """A SOAP session for BroadWorks.
 
-    The session owns its transport and its identity. The transport is an
-    httpx client. The client has its own cookie jar. The cookie jar holds
-    the JSESSIONID cookie after a login.
+    The transport is an httpx client. The client has its own cookie jar.
+    The cookie jar holds the JSESSIONID cookie after a login.
 
     The session also has an OCI-P ``session_id``. This id goes in the body
     of each message. The class makes a new UUID for the id by default.

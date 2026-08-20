@@ -1,8 +1,10 @@
-from dataclasses import dataclass, field, fields, is_dataclass
+from dataclasses import field, fields, is_dataclass
 from typing import Any, Self, TypeVar, get_type_hints
 
-from mercury_ocip_fast.utils.defines import to_snake_case
+from mercury_ocip_fast.utils.oci_types import OCINil, OCITable, OCITableRow
 from mercury_ocip_fast.utils.parser import Parser
+
+__all__ = ["OCINil", "OCITable", "OCITableRow"]
 
 
 class OCIType:
@@ -61,11 +63,6 @@ T = TypeVar("T")
 type Nillable[T] = T
 
 
-@dataclass
-class OCINil:
-    pass
-
-
 class OCIResponse(OCICommand):
     pass
 
@@ -82,29 +79,6 @@ class OCIRequest[TResponse: OCIResponse](OCICommand):
     """Base type for every OCI request."""
 
     _response_cls: type[TResponse]
-
-
-@dataclass
-class OCITableRow:
-    col: list[str]
-
-    def __init__(self, col):
-        self.col = col
-
-
-@dataclass
-class OCITable:
-    col_heading: list[str]
-    row: list[OCITableRow] = field(default_factory=list)
-
-    def to_dict(self):
-        return [
-            {
-                to_snake_case(self.col_heading[i]): row.col[i]
-                for i in range(len(self.col_heading))
-            }
-            for row in self.row
-        ]
 
 
 class ErrorResponse(OCIResponse):
