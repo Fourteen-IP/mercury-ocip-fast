@@ -1,11 +1,13 @@
 ## This Dockerfile sets up a MkDocs environment to serve documentation for the project.
-
-FROM python:3.12
+FROM python:3.12 AS builder
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 COPY . /app
 WORKDIR /app
 RUN uv sync --frozen --only-group=docs
 ENV PATH=/app/.venv/bin:$PATH
-EXPOSE 8080
+ARG MKDOCS_CONFIG=mkdocs-ocip.yml
+RUN mkdocs build -f ${MKDOCS_CONFIG} -d /site
 
-CMD ["mkdocs", "serve"]
+FROM nginx:alpine
+COPY --from=builder /site /usr/share/nginx/html
+EXPOSE 8080
