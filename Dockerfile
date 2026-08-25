@@ -9,4 +9,4 @@ RUN mkdocs build -f mkdocs.yml -d /site
 
 FROM nginx:alpine
 COPY --from=builder /site /usr/share/nginx/html
-EXPOSE 8080
+EXPOSE 80
