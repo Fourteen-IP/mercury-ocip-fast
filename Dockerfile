@@ -5,8 +5,7 @@ COPY . /app
 WORKDIR /app
 RUN uv sync --frozen --only-group=docs
 ENV PATH=/app/.venv/bin:$PATH
-ARG MKDOCS_CONFIG=mkdocs-ocip.yml
-RUN mkdocs build -f ${MKDOCS_CONFIG} -d /site
+RUN mkdocs build -f mkdocs.yml -d /site
 
 FROM nginx:alpine
 COPY --from=builder /site /usr/share/nginx/html
