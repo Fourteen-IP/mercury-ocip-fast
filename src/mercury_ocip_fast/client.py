@@ -155,10 +155,7 @@ class Client[S: (TCPSessionSettings, SOAPSessionSettings)]:
 
     @overload
     async def command[R: OCIResponse](
-        self,
-        request: Sequence[OCIRequest],
-        *,
-        response_type: type[R] | Sequence[type[R]],
+        self, request: Sequence[OCIRequest], *, response_type: type[R]
     ) -> list[R]: ...
 
     async def command[R: OCIResponse](
