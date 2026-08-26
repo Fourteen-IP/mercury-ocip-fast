@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Sequence
 from itertools import batched
 from typing import Self, overload
 
@@ -144,7 +145,7 @@ class Client[S: (TCPSessionSettings, SOAPSessionSettings)]:
 
     @overload
     async def command[R: OCIResponse](
-        self, request: list[OCIRequest[R]]
+        self, request: Sequence[OCIRequest[R]]
     ) -> list[R]: ...
 
     @overload
@@ -154,12 +155,15 @@ class Client[S: (TCPSessionSettings, SOAPSessionSettings)]:
 
     @overload
     async def command[R: OCIResponse](
-        self, request: list[OCIRequest], *, response_type: type[R] | list[R]
+        self,
+        request: Sequence[OCIRequest],
+        *,
+        response_type: type[R] | Sequence[type[R]],
     ) -> list[R]: ...
 
     async def command[R: OCIResponse](
         self,
-        request: OCIRequest[R] | list[OCIRequest[R]],
+        request: OCIRequest[R] | Sequence[OCIRequest[R]],
         *,
         response_type: type[R] | None = None,
     ) -> R | list[R]:

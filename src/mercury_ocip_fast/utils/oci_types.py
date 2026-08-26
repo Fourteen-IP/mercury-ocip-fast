@@ -25,7 +25,7 @@ class OCITable:
     col_heading: list[str]
     row: list[OCITableRow] = field(default_factory=list)
 
-    def to_dict(self):
+    def to_dict(self) -> list[dict[str, str]]:
         return [
             {
                 to_snake_case(self.col_heading[i]): row.col[i]
