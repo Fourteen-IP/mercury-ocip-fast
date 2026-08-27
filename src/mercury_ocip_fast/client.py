@@ -6,7 +6,11 @@ from typing import Self, overload
 import attrs
 
 from mercury_ocip_fast.authenticator import Authenticator
-from mercury_ocip_fast.commands.base_command import OCIRequest, OCIResponse
+from mercury_ocip_fast.commands.base_command import (
+    ErrorResponse,
+    OCIRequest,
+    SuccessfulResponse,
+)
 from mercury_ocip_fast.pool.session_pool import SessionPool, SessionPoolSettings
 from mercury_ocip_fast.requester import Requester
 from mercury_ocip_fast.session.session import (
@@ -141,29 +145,31 @@ class Client[S: (TCPSessionSettings, SOAPSessionSettings)]:
         return await self._async_setup()
 
     @overload
-    async def command[R: OCIResponse](self, request: OCIRequest[R]) -> R: ...
+    async def command[R: SuccessfulResponse](
+        self, request: OCIRequest[R]
+    ) -> R | ErrorResponse: ...
 
     @overload
-    async def command[R: OCIResponse](
+    async def command[R: SuccessfulResponse](
         self, request: Sequence[OCIRequest[R]]
-    ) -> list[R]: ...
+    ) -> list[R | ErrorResponse]: ...
 
     @overload
-    async def command[R: OCIResponse](
+    async def command[R: SuccessfulResponse](
         self, request: OCIRequest, *, response_type: type[R]
-    ) -> R: ...
+    ) -> R | ErrorResponse: ...
 
     @overload
-    async def command[R: OCIResponse](
+    async def command[R: SuccessfulResponse](
         self, request: Sequence[OCIRequest], *, response_type: type[R]
-    ) -> list[R]: ...
+    ) -> list[R | ErrorResponse]: ...
 
-    async def command[R: OCIResponse](
+    async def command[R: SuccessfulResponse](
         self,
         request: OCIRequest[R] | Sequence[OCIRequest[R]],
         *,
         response_type: type[R] | None = None,
-    ) -> R | list[R]:
+    ) -> R | ErrorResponse | list[R | ErrorResponse]:
         """Send one command, or a batch, and return the parsed response(s).
 
         The result is typed as the request's own response class, resolved
@@ -178,7 +184,7 @@ class Client[S: (TCPSessionSettings, SOAPSessionSettings)]:
         Returns:
             The parsed response, or a list of responses for a batch.
         """
-        all_results: list[R] = []
+        all_results: list[R | ErrorResponse] = []
 
         async with self._pool.session() as atom:
             if isinstance(request, OCIRequest):

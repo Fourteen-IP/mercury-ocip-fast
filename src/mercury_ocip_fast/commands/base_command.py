@@ -75,12 +75,6 @@ class SuccessResponse(OCIResponse):
     pass
 
 
-class OCIRequest[TResponse: OCIResponse](OCICommand):
-    """Base type for every OCI request."""
-
-    _response_cls: type[TResponse]
-
-
 class ErrorResponse(OCIResponse):
     error_code: int | None = field(default=None, metadata={"alias": "errorCode"})
     summary: str | None = field(default=None, metadata={"alias": "summary"})
@@ -88,3 +82,12 @@ class ErrorResponse(OCIResponse):
         default=None, metadata={"alias": "summaryEnglish"}
     )
     detail: str | None = field(default=None, metadata={"alias": "detail"})
+
+
+type SuccessfulResponse = OCIDataResponse | SuccessResponse
+
+
+class OCIRequest[TResponse: SuccessfulResponse](OCICommand):
+    """Base type for every OCI request."""
+
+    _response_cls: type[TResponse | ErrorResponse]
