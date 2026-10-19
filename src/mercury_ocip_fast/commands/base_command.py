@@ -1,4 +1,4 @@
-from dataclasses import field, fields, is_dataclass
+from dataclasses import dataclass, field, fields, is_dataclass
 from typing import Any, Self, TypeVar, get_type_hints
 
 from mercury_ocip_fast.utils.oci_types import OCINil, OCITable, OCITableRow
@@ -81,6 +81,7 @@ class OCIRequest[TResponse: OCIResponse](OCICommand):
     _response_cls: type[TResponse]
 
 
+@dataclass(kw_only=True)
 class ErrorResponse(OCIResponse):
     error_code: int | None = field(default=None, metadata={"alias": "errorCode"})
     summary: str | None = field(default=None, metadata={"alias": "summary"})
